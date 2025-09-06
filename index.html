@@ -410,6 +410,86 @@
             font-weight: bold;
             color: #3498db;
         }
+        
+        /* 网络状态显示 */
+        #networkStatus {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: linear-gradient(135deg, rgba(0, 0, 0, 0.8), rgba(20, 20, 20, 0.9));
+            backdrop-filter: blur(10px);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            padding: 12px 16px;
+            color: white;
+            font-size: 14px;
+            font-weight: bold;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+            z-index: 150;
+            min-width: 120px;
+        }
+        
+        .ping-display {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .ping-display::before {
+            content: '🌐';
+            margin-right: 8px;
+            font-size: 16px;
+        }
+        
+        .ping-display.excellent {
+            color: #27ae60;
+        }
+        
+        .ping-display.good {
+            color: #f39c12;
+        }
+        
+        .ping-display.medium {
+            color: #e67e22;
+        }
+        
+        .ping-display.poor {
+            color: #e74c3c;
+            animation: networkWarning 1s infinite alternate;
+        }
+        
+        @keyframes networkWarning {
+            0% { opacity: 1; }
+            100% { opacity: 0.6; }
+        }
+        
+        .network-quality {
+            display: flex;
+            align-items: center;
+            font-size: 12px;
+            color: #bdc3c7;
+        }
+        
+        .network-quality::before {
+            content: '📡';
+            margin-right: 6px;
+        }
+        
+        .quality-excellent {
+            color: #27ae60;
+        }
+        
+        .quality-good {
+            color: #3498db;
+        }
+        
+        .quality-medium {
+            color: #f39c12;
+        }
+        
+        .quality-poor {
+            color: #e74c3c;
+        }
 
         /* 游戏结束公告样式 */
         #gameEndModal {
@@ -637,10 +717,17 @@
             }
         }
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
 </head>
 <body>
     <div id="gameContainer">
         <canvas id="gameCanvas"></canvas>
+        
+        <!-- 网络状态显示 -->
+        <div id="networkStatus" class="hidden">
+            <div id="pingDisplay" class="ping-display good">50ms</div>
+            <div id="networkQuality" class="network-quality quality-good">良好</div>
+        </div>
         
         <!-- 游戏计时器 -->
         <div id="gameTimer">

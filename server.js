@@ -3,6 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const compression = require('compression');
+const zlib = require('zlib');
 
 // 创建HTTP服务器
 const server = http.createServer((req, res) => {
@@ -45,20 +46,37 @@ const gameState = {
     terrain: [],
     nextPlayerId: 1,
     nextPowerupId: 1,
-    gameStartTime: Date.now(),
-    gameDuration: 120000, // 120秒 = 120000毫秒
-    isGameEnded: false,
+    gameStartTime: null, // 游戏开始时间，初始为null
+    gameDuration: 120000, // 2分钟游戏时长
+    isGameEnded: true, // 初始状态为未开始
     killFeed: [],
     countdown: 0,
     showingResults: false,
-    countdownStartTime: 0 // 倒计时开始时间
+    countdownStartTime: 0, // 倒计时开始时间
+    // 增量更新相关
+    lastUpdateTime: 0,
+    updateCounter: 0,
+    lastPlayerStates: new Map(),
+    lastBulletStates: [],
+    lastPowerupStates: [],
+    // 网络质量检测
+    clientPing: new Map(),
+    clientUpdateRates: new Map(),
+    clientNetworkQuality: new Map(),
+    // 消息批处理队列
+    messageQueue: new Map(), // playerId -> array of messages
+    batchTimer: null,
+    lastBatchTime: 0,
+    // 数据压缩缓存
+    compressionCache: new Map()
 };
 
 // 确保游戏状态正确初始化
 console.log('游戏状态初始化:', {
     isGameEnded: gameState.isGameEnded,
     countdown: gameState.countdown,
-    showingResults: gameState.showingResults
+    showingResults: gameState.showingResults,
+    message: '等待玩家加入以开始游戏'
 });
 
 // 游戏配置
@@ -67,7 +85,7 @@ const GAME_CONFIG = {
     CANVAS_HEIGHT: 800,
     PLAYER_SIZE: 20,
     BULLET_SIZE: 4,
-    BULLET_SPEED: 8,
+    BULLET_SPEED: 10, // 玩家速度的1.5倍 (5 * 1.5 = 7.5)
     PLAYER_SPEED: 5,
     MAX_HEALTH: 100,
     RESPAWN_TIME: 3000, // 3秒复活时间
@@ -79,6 +97,329 @@ const GAME_CONFIG = {
     MELEE_DAMAGE: 100, // 近战攻击伤害（一刀秒杀）
     MELEE_COOLDOWN: 1000 // 近战攻击冷却时间1秒
 };
+
+// 二进制协议配置
+const MESSAGE_TYPES = {
+    // 客户端发送的消息
+    JOIN: 1,
+    MOVE: 2,
+    SHOOT: 3,
+    MELEE: 4,
+    RESPAWN: 5,
+    CHAT: 6,
+    PING: 7,
+    
+    // 服务器发送的消息
+    JOINED: 10,
+    PLAYER_JOINED: 11,
+    PLAYER_LEFT: 12,
+    GAME_STATE: 13,
+    PLAYER_MOVE: 14,
+    // BULLET_SHOT: 15, // 已移除，子弹现在通过 gameState 发送
+    PLAYER_HIT: 16,
+    BULLET_HIT_WALL: 17,
+    PLAYER_RESPAWN: 18,
+    GAME_UPDATE: 19,
+    INCREMENTAL_UPDATE: 20,
+    GAME_END: 21,
+    NEW_GAME_START: 22,
+    GAME_STARTED: 23,
+    MELEE_ATTACK: 24,
+    KILL_FEED: 25,
+    POWERUP_SPAWNED: 26,
+    POWERUP_PICKED_UP: 27,
+    CHAT_MESSAGE: 28,
+    PONG: 29,
+    CONNECTED: 30,
+    ERROR: 31
+};
+
+// 二进制编码器
+class BinaryEncoder {
+    constructor() {
+        this.buffer = null;
+        this.view = null;
+        this.offset = 0;
+    }
+    
+    init(size = 1024) {
+        this.buffer = new ArrayBuffer(size);
+        this.view = new DataView(this.buffer);
+        this.offset = 0;
+        return this;
+    }
+    
+    writeUint8(value) {
+        this.view.setUint8(this.offset, value);
+        this.offset += 1;
+        return this;
+    }
+    
+    writeUint16(value) {
+        this.view.setUint16(this.offset, value, true); // little endian
+        this.offset += 2;
+        return this;
+    }
+    
+    writeUint32(value) {
+        this.view.setUint32(this.offset, value, true);
+        this.offset += 4;
+        return this;
+    }
+    
+    writeFloat32(value) {
+        this.view.setFloat32(this.offset, value, true);
+        this.offset += 4;
+        return this;
+    }
+    
+    writeString(str) {
+        const encoder = new TextEncoder();
+        const bytes = encoder.encode(str);
+        this.writeUint16(bytes.length);
+        new Uint8Array(this.buffer, this.offset, bytes.length).set(bytes);
+        this.offset += bytes.length;
+        return this;
+    }
+    
+    getBuffer() {
+        return this.buffer.slice(0, this.offset);
+    }
+}
+
+// 编码加入确认（JOINED）
+function encodeJoined(playerId) {
+    const encoder = new BinaryEncoder().init(1024);
+    encoder.writeUint8(MESSAGE_TYPES.JOINED);
+    encoder.writeUint32(playerId);
+    // 将gameConfig作为字符串传输，便于扩展
+    encoder.writeString(JSON.stringify(GAME_CONFIG));
+    return encoder.getBuffer();
+}
+
+// 二进制解码器
+class BinaryDecoder {
+    constructor(buffer) {
+        this.view = new DataView(buffer);
+        this.offset = 0;
+    }
+    
+    readUint8() {
+        const value = this.view.getUint8(this.offset);
+        this.offset += 1;
+        return value;
+    }
+    
+    readUint16() {
+        const value = this.view.getUint16(this.offset, true);
+        this.offset += 2;
+        return value;
+    }
+    
+    readUint32() {
+        const value = this.view.getUint32(this.offset, true);
+        this.offset += 4;
+        return value;
+    }
+    
+    readFloat32() {
+        const value = this.view.getFloat32(this.offset, true);
+        this.offset += 4;
+        return value;
+    }
+    
+    readString() {
+        const length = this.readUint16();
+        const bytes = new Uint8Array(this.view.buffer, this.offset, length);
+        this.offset += length;
+        const decoder = new TextDecoder();
+        return decoder.decode(bytes);
+    }
+}
+
+// 编码游戏状态更新消息
+function encodeGameStateUpdate(gameState) {
+    const encoder = new BinaryEncoder().init(8192);
+    
+    encoder.writeUint8(MESSAGE_TYPES.GAME_UPDATE);
+    
+    // 写入玩家数量
+    const players = Array.from(gameState.players.values());
+    encoder.writeUint16(players.length);
+    
+    // 写入每个玩家数据
+    players.forEach(player => {
+        encoder.writeUint32(player.id);
+        encoder.writeString(player.nickname);
+        encoder.writeFloat32(player.x);
+        encoder.writeFloat32(player.y);
+        encoder.writeFloat32(player.angle);
+        encoder.writeUint8(player.health);
+        encoder.writeUint16(Math.min(65535, Math.max(0, Math.floor(player.score || 0))));
+        encoder.writeUint8(player.isAlive ? 1 : 0);
+        encoder.writeString(player.color);
+        
+        // 道具状态
+        encoder.writeUint8(player.powerups.shield.active ? 1 : 0);
+        encoder.writeUint8(player.powerups.rapidFire.active ? 1 : 0);
+        encoder.writeUint8(player.powerups.damageBoost.active ? 1 : 0);
+    });
+    
+    // 写入子弹数量和数据
+    encoder.writeUint16(gameState.bullets.length);
+    gameState.bullets.forEach(bullet => {
+        encoder.writeString(bullet.id);
+        encoder.writeFloat32(bullet.x);
+        encoder.writeFloat32(bullet.y);
+        encoder.writeFloat32(bullet.vx);
+        encoder.writeFloat32(bullet.vy);
+        encoder.writeUint32(bullet.ownerId);
+        encoder.writeUint8(bullet.damage);
+    });
+    
+    // 写入道具数量和数据
+    encoder.writeUint16(gameState.powerups.length);
+    gameState.powerups.forEach(powerup => {
+        encoder.writeUint32(powerup.id);
+        encoder.writeString(powerup.type);
+        encoder.writeFloat32(powerup.x);
+        encoder.writeFloat32(powerup.y);
+    });
+    
+    // 写入剩余时间（毫秒）
+    let remainingTime = 0;
+    if (gameState.gameStartTime && !gameState.isGameEnded) {
+        const now = Date.now();
+        remainingTime = Math.max(0, gameState.gameDuration - (now - gameState.gameStartTime));
+    }
+    encoder.writeUint32(remainingTime);
+
+    return encoder.getBuffer();
+}
+
+// encodeBulletShot 函数已移除，不再需要单独的子弹射击消息
+
+// 编码初始完整游戏状态（用于新加入玩家）
+function encodeInitialGameState(state) {
+    const encoder = new BinaryEncoder().init(16384);
+    encoder.writeUint8(MESSAGE_TYPES.GAME_STATE);
+
+    // 玩家
+    const players = Array.from(state.players.values());
+    encoder.writeUint16(players.length);
+    players.forEach(player => {
+        encoder.writeUint32(player.id);
+        encoder.writeString(player.nickname);
+        encoder.writeFloat32(player.x);
+        encoder.writeFloat32(player.y);
+        encoder.writeFloat32(player.angle);
+        encoder.writeUint8(player.health);
+        encoder.writeUint16(Math.min(65535, Math.max(0, Math.floor(player.score || 0))));
+        encoder.writeUint8(player.isAlive ? 1 : 0);
+        encoder.writeString(player.color);
+        // powerups flags
+        encoder.writeUint8(player.powerups.shield.active ? 1 : 0);
+        encoder.writeUint8(player.powerups.rapidFire.active ? 1 : 0);
+        encoder.writeUint8(player.powerups.damageBoost.active ? 1 : 0);
+    });
+
+    // 子弹
+    encoder.writeUint16(state.bullets.length);
+    state.bullets.forEach(bullet => {
+        encoder.writeString(String(bullet.id));
+        encoder.writeFloat32(bullet.x);
+        encoder.writeFloat32(bullet.y);
+        encoder.writeFloat32(bullet.vx);
+        encoder.writeFloat32(bullet.vy);
+        encoder.writeUint32(bullet.ownerId);
+        encoder.writeUint8(bullet.damage);
+    });
+
+    // 道具（包含颜色和图标，便于渲染）
+    encoder.writeUint16(state.powerups.length);
+    state.powerups.forEach(p => {
+        encoder.writeUint32(p.id);
+        encoder.writeString(p.type);
+        encoder.writeFloat32(p.x);
+        encoder.writeFloat32(p.y);
+        encoder.writeString(p.getColor ? p.getColor() : '#95a5a6');
+        encoder.writeString(p.getIcon ? p.getIcon() : '?');
+    });
+
+    // 地形
+    encoder.writeUint16(state.terrain.length);
+    state.terrain.forEach(t => {
+        encoder.writeUint32(t.id);
+        encoder.writeFloat32(t.x);
+        encoder.writeFloat32(t.y);
+        encoder.writeFloat32(t.width);
+        encoder.writeFloat32(t.height);
+        encoder.writeString(t.type || 'wall');
+    });
+
+    return encoder.getBuffer();
+}
+
+// 解码客户端消息
+function decodeMessage(buffer) {
+    try {
+        const decoder = new BinaryDecoder(buffer);
+        const messageType = decoder.readUint8();
+        
+        switch (messageType) {
+            case MESSAGE_TYPES.JOIN:
+                return {
+                    type: 'join',
+                    nickname: decoder.readString(),
+                    clientTime: decoder.readUint32()
+                };
+                
+            case MESSAGE_TYPES.MOVE:
+                return {
+                    type: 'move',
+                    x: decoder.readFloat32(),
+                    y: decoder.readFloat32(),
+                    angle: decoder.readFloat32()
+                };
+                
+            case MESSAGE_TYPES.SHOOT:
+                return {
+                    type: 'shoot',
+                    targetX: decoder.readFloat32(),
+                    targetY: decoder.readFloat32()
+                };
+                
+            case MESSAGE_TYPES.MELEE:
+                return {
+                    type: 'melee',
+                    targetX: decoder.readFloat32(),
+                    targetY: decoder.readFloat32()
+                };
+                
+            case MESSAGE_TYPES.RESPAWN:
+                return { type: 'respawn' };
+            
+            case MESSAGE_TYPES.CHAT:
+                return {
+                    type: 'chatMessage',
+                    content: decoder.readString()
+                };
+                
+            case MESSAGE_TYPES.PING:
+                return {
+                    type: 'ping',
+                    timestamp: decoder.readUint32()
+                };
+                
+            default:
+                console.log('未知的二进制消息类型:', messageType);
+                return null;
+        }
+    } catch (error) {
+        console.log('二进制解码错误:', error);
+        return null;
+    }
+}
 
 // 道具类型
 const POWERUP_TYPES = {
@@ -134,9 +475,9 @@ class Player {
         };
     }
 
-    update() {
+    update(deltaTime = 16) {
         if (!this.isAlive && this.respawnTime > 0) {
-            this.respawnTime -= 16; // 假设60FPS
+            this.respawnTime -= deltaTime; // 使用实际时间差
             if (this.respawnTime <= 0) {
                 this.respawn();
             }
@@ -253,7 +594,12 @@ class Player {
             cooldown = Math.floor(cooldown * 0.5);
         }
         
-        return this.isAlive && (now - this.lastShot) >= cooldown;
+        const canShoot = this.isAlive && (now - this.lastShot) >= cooldown;
+        if (!canShoot) {
+            console.log(`射击冷却检查: 玩家${this.id}, 当前时间=${now}, 上次射击=${this.lastShot}, 时间差=${now - this.lastShot}, 冷却时间=${cooldown}`);
+        }
+        
+        return canShoot;
     }
 
     shoot(targetX, targetY) {
@@ -262,9 +608,34 @@ class Player {
         this.lastShot = Date.now();
         
         // 计算子弹方向
-        const dx = targetX - this.x;
-        const dy = targetY - this.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
+        const centerX = this.x + GAME_CONFIG.PLAYER_SIZE / 2;
+        const centerY = this.y + GAME_CONFIG.PLAYER_SIZE / 2;
+        let dx = targetX - centerX;
+        let dy = targetY - centerY;
+        let distance = Math.sqrt(dx * dx + dy * dy);
+        
+        // 距离过小（例如点击在玩家中心）使用当前朝向作为方向，避免产生 NaN
+        let dirX, dirY;
+        if (!distance || distance < 1e-3) {
+            const angle = this.angle || 0;
+            dirX = Math.cos(angle);
+            dirY = Math.sin(angle);
+            // 备用，防止角度也异常
+            if (!dirX && !dirY) {
+                dirX = 1; dirY = 0;
+            }
+        } else {
+            dirX = dx / distance;
+            dirY = dy / distance;
+        }
+        
+        // 将子弹出生点前移，避免与自身或紧贴的墙体立即发生碰撞
+        const muzzleOffset = GAME_CONFIG.PLAYER_SIZE / 2 + 4;
+        const startX = centerX + dirX * muzzleOffset;
+        const startY = centerY + dirY * muzzleOffset;
+        const speed = GAME_CONFIG.BULLET_SPEED;
+        const vx = dirX * speed;
+        const vy = dirY * speed;
         
         // 计算伤害
         let damage = 25;
@@ -272,16 +643,14 @@ class Player {
             damage = Math.floor(damage * 1.5);
         }
         
-        const bullet = {
-            id: Date.now() + Math.random(),
-            x: this.x + GAME_CONFIG.PLAYER_SIZE / 2,
-            y: this.y + GAME_CONFIG.PLAYER_SIZE / 2,
-            vx: (dx / distance) * GAME_CONFIG.BULLET_SPEED,
-            vy: (dy / distance) * GAME_CONFIG.BULLET_SPEED,
-            ownerId: this.id,
-            damage: damage,
-            life: 120 // 子弹存活时间(帧数)
-        };
+        const bullet = new Bullet(
+            startX,
+            startY,
+            vx,
+            vy,
+            this.id,
+            damage
+        );
         
         return bullet;
     }
@@ -331,7 +700,7 @@ class Player {
             
             if (wasAlive && !hitPlayer.isAlive) {
                 // 击杀
-                this.score += 100;
+                this.score = Math.min(65535, (this.score || 0) + 100);
                 // 添加击杀信息
                 const killInfo = {
                     killer: this.nickname,
@@ -348,7 +717,7 @@ class Player {
                 });
             } else {
                 // 击中但未击杀
-                this.score += 10;
+                this.score = Math.min(65535, (this.score || 0) + 10);
             }
             
             // 广播近战攻击事件
@@ -392,13 +761,14 @@ class Bullet {
         this.vy = vy;
         this.ownerId = ownerId;
         this.damage = damage;
-        this.life = 120;
+        this.life = 2000; // 2秒生命周期(毫秒)
+        this.createdTime = Date.now();
     }
 
-    update() {
+    update(deltaTime = 16) {
         this.x += this.vx;
         this.y += this.vy;
-        this.life--;
+        this.life -= deltaTime; // 使用时间差减少生命值
     }
 
     isDead() {
@@ -458,37 +828,578 @@ function checkCollision(rect1, rect2) {
            rect1.y + rect1.height > rect2.y;
 }
 
-// 广播消息给所有客户端 - 优化数据包
-function broadcast(message, excludeId = null) {
-    // 压缩数据包
-    const data = JSON.stringify(message);
-    
-    // 如果数据包太大，进行优化
-    if (data.length > 1024) {
-        // 对于大数据包，只发送必要信息
-        const optimizedMessage = optimizeMessage(message);
-        const optimizedData = JSON.stringify(optimizedMessage);
-        
-        wss.clients.forEach(client => {
-            if (client.readyState === WebSocket.OPEN && client.playerId !== excludeId) {
-                client.send(optimizedData);
-            }
-        });
+// 高级消息压缩和序列化系统
+const messageCache = new Map();
+const messageIdCounter = { value: 0 };
+
+// 检查是否应该使用二进制格式
+function shouldUseBinary(messageType) {
+    // 仅对高频率的大数据量消息使用二进制格式
+    return messageType === 'gameUpdate';
+}
+
+// 智能编码消息（二进制或JSON）
+function encodeMessage(message) {
+    if (shouldUseBinary(message.type)) {
+        // 使用二进制编码
+        switch (message.type) {
+            case 'gameUpdate':
+                return encodeGameStateUpdate(gameState);
+            default:
+                // 暂时回退到JSON
+                return JSON.stringify(message);
+        }
     } else {
-        wss.clients.forEach(client => {
-            if (client.readyState === WebSocket.OPEN && client.playerId !== excludeId) {
-                client.send(data);
-            }
+        // 使用JSON编码
+        return JSON.stringify(message);
+    }
+}
+
+// 广播消息给所有客户端 - 优化版本支持批处理和压缩
+function broadcast(message, excludeId = null, priority = 1) {
+    // 对于二进制消息，直接编码和发送
+    if (shouldUseBinary(message.type)) {
+        const binaryData = encodeMessage(message);
+        sendToClients(binaryData, excludeId, priority);
+        return;
+    }
+    
+    // 对于JSON消息，使用现有逻辑
+    const optimizedMessage = optimizeMessage(message);
+    
+    // 根据优先级决定是否立即发送还是批处理
+    if (priority >= 3 || message.type === 'playerHit' || message.type === 'meleeAttack') {
+        // 高优先级消息立即发送
+        const serializedData = compressMessage(optimizedMessage);
+        sendToClients(serializedData, excludeId, priority);
+    } else {
+        // 低优先级消息加入批处理队列
+        addToBatchQueue(optimizedMessage, excludeId, priority);
+    }
+}
+
+// 消息序列化 - 暂时使用JSON确保兼容性
+function serializeMessage(message) {
+    // 暂时禁用二进制序列化，使用JSON确保兼容性
+    return JSON.stringify(message);
+}
+
+// 增量更新的二进制序列化
+function serializeIncrementalUpdate(update) {
+    const parts = [];
+    
+    // 消息类型标识 (1字节)
+    parts.push(0x01); // 增量更新标识
+    
+    // 时间戳 (4字节)
+    const timestamp = update.timestamp || Date.now();
+    parts.push(
+        (timestamp >> 24) & 0xFF,
+        (timestamp >> 16) & 0xFF,
+        (timestamp >> 8) & 0xFF,
+        timestamp & 0xFF
+    );
+    
+    // 玩家更新
+    if (update.changedPlayers && update.changedPlayers.length > 0) {
+        parts.push(0x02); // 玩家更新标识
+        parts.push(update.changedPlayers.length); // 玩家数量
+        
+        update.changedPlayers.forEach(player => {
+            parts.push(player.id); // 玩家ID
+            parts.push(
+                Math.round(player.x / 2), // 位置精度降低到2像素
+                Math.round(player.y / 2),
+                Math.round(player.angle * 50) // 角度精度降低
+            );
+            parts.push(player.health, player.score, player.isAlive ? 1 : 0);
         });
+    }
+    
+    // 子弹更新
+    if (update.newBullets && update.newBullets.length > 0) {
+        parts.push(0x03); // 新子弹标识
+        parts.push(update.newBullets.length);
+        
+        update.newBullets.forEach(bullet => {
+            parts.push(
+                Math.round(bullet.x / 2),
+                Math.round(bullet.y / 2),
+                Math.round(bullet.vx * 10), // 速度精度降低
+                Math.round(bullet.vy * 10),
+                bullet.ownerId
+            );
+        });
+    }
+    
+    // 道具更新
+    if (update.newPowerups && update.newPowerups.length > 0) {
+        parts.push(0x04); // 新道具标识
+        parts.push(update.newPowerups.length);
+        
+        update.newPowerups.forEach(powerup => {
+            parts.push(
+                powerup.id,
+                Math.round(powerup.x / 2),
+                Math.round(powerup.y / 2),
+                getPowerupTypeId(powerup.type)
+            );
+        });
+    }
+    
+    // 结束标识
+    parts.push(0xFF);
+    
+    return Buffer.from(parts);
+}
+
+// 获取道具类型ID
+function getPowerupTypeId(type) {
+    const typeMap = {
+        'shield': 1,
+        'rapid_fire': 2,
+        'damage_boost': 3,
+        'heal': 4
+    };
+    return typeMap[type] || 0;
+}
+
+// 简化的消息系统
+
+// 发送消息到客户端 - 优化版本支持自适应发送
+function sendToClients(data, excludeId, priority = 1) {
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN && client.playerId !== excludeId) {
+            const clientPing = gameState.clientPing.get(client.playerId) || 50;
+            const networkQuality = gameState.clientNetworkQuality.get(client.playerId) || 'good';
+            
+            // 根据网络质量自适应发送
+            if (networkQuality === 'poor' && priority < 2) {
+                // 弱网环境下跳过低优先级消息
+                return;
+            }
+            
+            try {
+                client.send(data);
+            } catch (error) {
+                console.error(`发送消息失败给客户端 ${client.playerId}:`, error);
+            }
+        }
+    });
+}
+
+// 添加到批处理队列
+function addToBatchQueue(message, excludeId, priority) {
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN && client.playerId !== excludeId) {
+            const playerId = client.playerId;
+            if (!gameState.messageQueue.has(playerId)) {
+                gameState.messageQueue.set(playerId, []);
+            }
+            
+            const queue = gameState.messageQueue.get(playerId);
+            queue.push({ message, priority, timestamp: Date.now() });
+            
+            // 限制队列大小，防止内存泄漏
+            if (queue.length > 50) {
+                queue.shift(); // 移除最旧的消息
+            }
+        }
+    });
+    
+    // 启动批处理定时器
+    startBatchTimer();
+}
+
+// 启动批处理定时器
+function startBatchTimer() {
+    if (gameState.batchTimer) return;
+    
+    gameState.batchTimer = setTimeout(() => {
+        processBatchQueue();
+        gameState.batchTimer = null;
+    }, 16); // 16ms批处理间隔 (60fps)
+}
+
+// 处理批处理队列
+function processBatchQueue() {
+    const now = Date.now();
+    
+    gameState.messageQueue.forEach((queue, playerId) => {
+        if (queue.length === 0) return;
+        
+        const client = Array.from(wss.clients).find(c => c.playerId === playerId);
+        if (!client || client.readyState !== WebSocket.OPEN) {
+            gameState.messageQueue.delete(playerId);
+            return;
+        }
+        
+        const networkQuality = gameState.clientNetworkQuality.get(playerId) || 'good';
+        const clientPing = gameState.clientPing.get(playerId) || 50;
+        
+        // 根据网络质量决定批处理大小
+        let batchSize;
+        if (networkQuality === 'poor') {
+            batchSize = Math.min(3, queue.length); // 弱网最多3个消息
+        } else if (networkQuality === 'medium') {
+            batchSize = Math.min(8, queue.length); // 中等网络最多8个消息
+        } else {
+            batchSize = Math.min(15, queue.length); // 好网络最多15个消息
+        }
+        
+        // 提取要发送的消息
+        const batch = queue.splice(0, batchSize);
+        
+        if (batch.length === 1) {
+            // 单条消息直接发送
+            const data = compressMessage(batch[0].message);
+            try {
+                client.send(data);
+            } catch (error) {
+                console.error(`发送单条批处理消息失败:`, error);
+            }
+        } else if (batch.length > 1) {
+            // 多条消息批处理发送
+            const batchMessage = {
+                type: 'batch',
+                messages: batch.map(item => item.message),
+                timestamp: now
+            };
+            
+            const data = compressMessage(batchMessage);
+            try {
+                client.send(data);
+            } catch (error) {
+                console.error(`发送批处理消息失败:`, error);
+            }
+        }
+    });
+    
+    gameState.lastBatchTime = now;
+}
+
+// 消息压缩函数
+function compressMessage(message) {
+    const jsonString = JSON.stringify(message);
+    
+    // 小消息不压缩
+    if (jsonString.length < 200) {
+        return jsonString;
+    }
+    
+    try {
+        const compressed = zlib.gzipSync(jsonString);
+        
+        // 如果压缩后反而更大，则不压缩
+        if (compressed.length >= jsonString.length * 0.9) {
+            return jsonString;
+        }
+        
+        return JSON.stringify({
+            type: 'compressed',
+            data: compressed.toString('base64'),
+            originalLength: jsonString.length
+        });
+    } catch (error) {
+        console.error('消息压缩失败:', error);
+        return jsonString;
+    }
+}
+
+
+// 检查玩家状态是否发生变化
+function hasPlayerChanged(playerId, currentPlayer) {
+    const lastState = gameState.lastPlayerStates.get(playerId);
+    if (!lastState) return true;
+    
+    return (
+        Math.abs(currentPlayer.x - lastState.x) > 0.5 ||
+        Math.abs(currentPlayer.y - lastState.y) > 0.5 ||
+        Math.abs(currentPlayer.angle - lastState.angle) > 0.01 ||
+        currentPlayer.health !== lastState.health ||
+        currentPlayer.score !== lastState.score ||
+        currentPlayer.isAlive !== lastState.isAlive ||
+        JSON.stringify(currentPlayer.powerups) !== JSON.stringify(lastState.powerups)
+    );
+}
+
+// 检查子弹状态是否发生变化
+function hasBulletChanged(bulletId, currentBullet) {
+    const lastState = gameState.lastBulletStates.find(b => b.id === bulletId);
+    if (!lastState) return true;
+    
+    return (
+        Math.abs(currentBullet.x - lastState.x) > 0.5 ||
+        Math.abs(currentBullet.y - lastState.y) > 0.5 ||
+        Math.abs(currentBullet.vx - lastState.vx) > 0.01 ||
+        Math.abs(currentBullet.vy - lastState.vy) > 0.01
+    );
+}
+
+// 检查道具状态是否发生变化
+function hasPowerupChanged(powerupId, currentPowerup) {
+    const lastState = gameState.lastPowerupStates.find(p => p.id === powerupId);
+    if (!lastState) return true;
+    
+    return (
+        currentPowerup.x !== lastState.x ||
+        currentPowerup.y !== lastState.y ||
+        currentPowerup.type !== lastState.type
+    );
+}
+
+// 高级增量更新系统 - 大幅优化网络性能
+function generateIncrementalUpdate() {
+    const currentTime = Date.now();
+    const players = getPlayersWithBuffs();
+    
+    // 智能更新频率控制 - 保证同步优先
+    const averagePing = Array.from(gameState.clientPing.values()).reduce((a, b) => a + b, 0) / gameState.clientPing.size || 50;
+    const playerCount = gameState.players.size;
+    const poorNetworkCount = Array.from(gameState.clientNetworkQuality.values()).filter(q => q === 'poor').length;
+    
+    // 强制同步检查 - 每5秒强制发送完整状态确保同步
+    const shouldForceBroadcast = (currentTime - (gameState.lastForceBroadcast || 0)) > 5000;
+    
+    // 根据网络质量和玩家数量动态调整更新频率 - 提高同步频率
+    let updateInterval;
+    if (poorNetworkCount > playerCount * 0.5) {
+        updateInterval = 10; // 大部分玩家网络质量差：10次更新一次完整状态
+    } else if (averagePing > 200) {
+        updateInterval = 8; // 高延迟：8次更新一次完整状态
+    } else if (averagePing > 150) {
+        updateInterval = 6; // 中高延迟：6次更新一次完整状态
+    } else if (averagePing > 100) {
+        updateInterval = 5; // 中等延迟：5次更新一次完整状态
+    } else if (playerCount > 8) {
+        updateInterval = 4; // 多玩家：4次更新一次完整状态
+    } else {
+        updateInterval = 3; // 低延迟少玩家：3次更新一次完整状态
+    }
+    
+    // 检查玩家变化 - 激进优化，最小化数据传输
+    const changedPlayers = [];
+    const newPlayers = [];
+    
+    players.forEach(player => {
+        if (hasPlayerChanged(player.id, player)) {
+            if (gameState.lastPlayerStates.has(player.id)) {
+                // 只发送关键变化 - 更严格的阈值
+                const lastState = gameState.lastPlayerStates.get(player.id);
+                const changes = { id: player.id }; // 始终包含id
+                
+                // 位置变化 - 增大阈值到3像素
+                if (Math.abs(player.x - lastState.x) > 3) {
+                    changes.x = Math.round(player.x / 4) * 4; // 4像素精度
+                }
+                if (Math.abs(player.y - lastState.y) > 3) {
+                    changes.y = Math.round(player.y / 4) * 4; // 4像素精度
+                }
+                
+                // 角度变化 - 增大阈值到0.1弧度
+                if (Math.abs(player.angle - lastState.angle) > 0.1) {
+                    changes.angle = Math.round(player.angle * 10) / 10; // 降低精度
+                }
+                
+                // 非位置属性
+                if (player.health !== lastState.health) changes.health = player.health;
+                if (player.score !== lastState.score) changes.score = player.score;
+                if (player.isAlive !== lastState.isAlive) changes.isAlive = player.isAlive;
+                
+                // 检查powerups变化
+                const powerupsChanged = JSON.stringify(player.powerups) !== JSON.stringify(lastState.powerups);
+                if (powerupsChanged) changes.powerups = player.powerups;
+                
+                // 只在有实际变化时添加（除了id之外）
+                if (Object.keys(changes).length > 1) {
+                    changedPlayers.push(changes);
+                }
+            } else {
+                // 新玩家 - 优化精度
+                newPlayers.push({
+                    id: player.id,
+                    nickname: player.nickname,
+                    x: Math.round(player.x / 4) * 4,
+                    y: Math.round(player.y / 4) * 4,
+                    angle: Math.round(player.angle * 10) / 10,
+                    health: player.health,
+                    score: player.score,
+                    isAlive: player.isAlive,
+                    color: player.color,
+                    powerups: player.powerups
+                });
+            }
+            
+            // 更新最后状态
+            gameState.lastPlayerStates.set(player.id, {
+                x: player.x,
+                y: player.y,
+                angle: player.angle,
+                health: player.health,
+                score: player.score,
+                isAlive: player.isAlive,
+                powerups: JSON.parse(JSON.stringify(player.powerups))
+            });
+        }
+    });
+    
+    // 子弹更新 - 激进优化，只发送必要的子弹数据
+    const newBullets = [];
+    const removedBullets = [];
+    
+    // 检测新子弹 - 添加详细调试日志
+    console.log(`当前子弹数量: ${gameState.bullets.length}, 上次记录的子弹数量: ${gameState.lastBulletStates.length}`);
+    gameState.bullets.forEach(bullet => {
+        if (!gameState.lastBulletStates.find(b => b.id === bullet.id)) {
+            console.log(`发现新子弹: ID=${bullet.id}, 位置=(${bullet.x.toFixed(2)}, ${bullet.y.toFixed(2)})`);
+            const newBullet = {
+                id: bullet.id,
+                x: Math.round(bullet.x * 2) / 2, // 0.5像素精度，提高平滑度
+                y: Math.round(bullet.y * 2) / 2,
+                vx: bullet.vx, // 保持完整速度精度
+                vy: bullet.vy,
+                ownerId: bullet.ownerId
+            };
+            newBullets.push(newBullet);
+            console.log(`新子弹已加入newBullets数组，当前数组长度: ${newBullets.length}`);
+        }
+    });
+    
+    // 检测移除的子弹
+    gameState.lastBulletStates.forEach(lastBullet => {
+        if (!gameState.bullets.find(b => b.id === lastBullet.id)) {
+            removedBullets.push(lastBullet.id);
+        }
+    });
+    
+    // 更新子弹最后状态 - 只保存必要信息
+    gameState.lastBulletStates = gameState.bullets.map(bullet => ({
+        id: bullet.id,
+        x: bullet.x,
+        y: bullet.y
+    }));
+    
+    // 道具更新 - 只发送新道具和移除的道具
+    const newPowerups = [];
+    const removedPowerups = [];
+    
+    // 检测新道具
+    gameState.powerups.forEach(powerup => {
+        if (!gameState.lastPowerupStates.find(p => p.id === powerup.id)) {
+            newPowerups.push({
+                id: powerup.id,
+                x: Math.round(powerup.x / 4) * 4, // 4像素精度
+                y: Math.round(powerup.y / 4) * 4,
+                type: powerup.type // 只发送类型，客户端自行计算颜色和图标
+            });
+        }
+    });
+    
+    // 检测移除的道具
+    gameState.lastPowerupStates.forEach(lastPowerup => {
+        if (!gameState.powerups.find(p => p.id === lastPowerup.id)) {
+            removedPowerups.push(lastPowerup.id);
+        }
+    });
+    
+    // 更新道具最后状态
+    gameState.lastPowerupStates = gameState.powerups.map(powerup => ({
+        id: powerup.id,
+        x: powerup.x,
+        y: powerup.y,
+        type: powerup.type
+    }));
+    
+    // 决定是否发送完整更新 - 添加强制同步检查
+    const shouldSendFullUpdate = gameState.updateCounter % updateInterval === 0 || shouldForceBroadcast;
+    
+    // 更新强制广播时间戳
+    if (shouldForceBroadcast) {
+        gameState.lastForceBroadcast = currentTime;
+    }
+    
+    if (shouldSendFullUpdate) {
+        const update = {
+            type: 'gameUpdate',
+            fullUpdate: true,
+            players: players.map(player => ({
+                id: player.id,
+                nickname: player.nickname,
+                x: Math.round(player.x / 4) * 4, // 4像素精度
+                y: Math.round(player.y / 4) * 4,
+                angle: Math.round(player.angle * 10) / 10, // 降低角度精度
+                health: player.health,
+                score: player.score,
+                isAlive: player.isAlive,
+                color: player.color,
+                powerups: player.powerups
+            })),
+            bullets: gameState.bullets.map(bullet => ({
+                id: bullet.id,
+                x: Math.round(bullet.x / 2) * 2,
+                y: Math.round(bullet.y / 2) * 2,
+                vx: Math.round(bullet.vx * 10) / 10,
+                vy: Math.round(bullet.vy * 10) / 10,
+                ownerId: bullet.ownerId
+            })),
+            powerups: gameState.powerups.map(powerup => ({
+                id: powerup.id,
+                type: powerup.type,
+                x: Math.round(powerup.x / 2) * 2,
+                y: Math.round(powerup.y / 2) * 2,
+                color: powerup.getColor(),
+                icon: powerup.getIcon()
+            })),
+            remainingTime: Math.max(0, gameState.gameDuration - (currentTime - gameState.gameStartTime)),
+            isGameEnded: gameState.isGameEnded
+        };
+        
+        // 地形数据发送频率提高保证同步
+        if (gameState.updateCounter % 60 === 0 || gameState.updateCounter === 1) {
+            update.terrain = gameState.terrain;
+        }
+        
+        return update;
+    } else {
+        // 增量更新 - 激进优化，只在有实际变化时发送
+        const update = {
+            type: 'incrementalUpdate', // 使用不同的类型名以区分增量和完整更新
+            timestamp: currentTime,
+            remainingTime: Math.max(0, gameState.gameDuration - (currentTime - gameState.gameStartTime)), // 始终包含剩余时间
+            isGameEnded: gameState.isGameEnded
+        };
+        
+        // 只添加有数据的字段
+        if (newPlayers.length > 0) update.newPlayers = newPlayers;
+        if (changedPlayers.length > 0) update.changedPlayers = changedPlayers;
+        if (newBullets.length > 0) update.newBullets = newBullets;
+        if (removedBullets.length > 0) update.removedBullets = removedBullets;
+        if (newPowerups.length > 0) update.newPowerups = newPowerups;
+        if (removedPowerups.length > 0) update.removedPowerups = removedPowerups;
+        
+        // 始终发送增量更新（因为包含剩余时间需要持续更新）
+        
+        // 调试日志：检查子弹更新
+        if (newBullets.length > 0 || removedBullets.length > 0) {
+            console.log(`增量更新包含子弹: 新增${newBullets.length}个, 移除${removedBullets.length}个`);
+        }
+        
+        return update;
     }
 }
 
 // 优化消息数据包
 function optimizeMessage(message) {
     if (message.type === 'gameUpdate') {
-        // 优化游戏更新数据包
+        // 对于增量更新，直接返回
+        if (!message.fullUpdate) {
+            return message;
+        }
+        
+        // 优化完整游戏更新数据包
         const optimized = {
             type: message.type,
+            fullUpdate: message.fullUpdate,
             players: message.players.map(player => ({
                 id: player.id,
                 x: Math.round(player.x),
@@ -549,30 +1460,152 @@ function getPlayersWithBuffs() {
     }));
 }
 
-// 处理客户端连接
+// 处理客户端连接 - 优化连接管理
 wss.on('connection', (ws) => {
     console.log('新客户端连接');
     
+    // 设置连接参数
+    ws.isAlive = true;
+    ws.lastPingTime = Date.now();
+    ws.messageCount = 0;
+    // ws.lastMessageTime 不在这里初始化，让第一条消息通过
+    
+    // 为新连接的客户端注册pong监听器
+    ws.on('pong', () => {
+        ws.isAlive = true;
+    });
+    
+    // 设置连接超时 - 延长到30秒
+    ws.connectionTimeout = setTimeout(() => {
+        if (!ws.playerId) {
+            console.log('客户端连接超时，断开连接');
+            ws.terminate();
+        }
+    }, 30000); // 30秒内必须完成登录
+    
     ws.on('message', (data) => {
+        // console.log('收到原始数据:', data.toString().substring(0, 100)); // 减少日志输出
         try {
-            const message = JSON.parse(data);
+            // 限制消息频率防止DoS攻击 - 放宽限制
+            const now = Date.now();
+            if (ws.lastMessageTime && now - ws.lastMessageTime < 16) { // 最小16ms间隔 (60FPS)
+                // console.log('消息频率过快，忽略'); // 减少日志输出
+                return;
+            }
+            ws.lastMessageTime = now;
+            ws.messageCount++;
+            
+            // 限制消息大小
+            if (data.length > 1024 * 10) { // 最大10KB
+                console.log('消息过大，忽略');
+                return;
+            }
+            
+            let message;
+            
+            // 检查数据格式：二进制或JSON
+            if (data instanceof Buffer || data instanceof ArrayBuffer) {
+                // 首先尝试判断是否为JSON字符串
+                try {
+                    const textData = data instanceof Buffer ? data.toString('utf8') : new TextDecoder().decode(data);
+                    // 如果能成功解析为JSON，说明是JSON格式
+                    if (textData.startsWith('{') || textData.startsWith('[')) {
+                        message = JSON.parse(textData);
+                    } else {
+                        // 二进制格式
+                        const arrayBuffer = data instanceof Buffer
+                            ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+                            : data;
+                        message = decodeMessage(arrayBuffer);
+                        if (!message) {
+                            throw new Error('二进制解码失败');
+                        }
+                    }
+                } catch (parseError) {
+                    // 如果JSON解析失败，尝试二进制解码
+                    const arrayBuffer = data instanceof Buffer
+                        ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+                        : data;
+                    message = decodeMessage(arrayBuffer);
+                    if (!message) {
+                        throw new Error('二进制解码失败');
+                    }
+                }
+            } else {
+                // JSON格式（向后兼容）
+                message = JSON.parse(data);
+            }
+            
+            // console.log('收到消息:', message.type, message); // 减少日志输出
             handleMessage(ws, message);
         } catch (error) {
             console.error('解析消息错误:', error);
+            // 发送错误响应（使用JSON格式以确保兼容性）
+            ws.send(JSON.stringify({
+                type: 'error',
+                message: '消息格式错误'
+            }));
         }
     });
 
     ws.on('close', () => {
+        console.log('客户端断开连接');
+        
+        // 清理连接超时
+        if (ws.connectionTimeout) {
+            clearTimeout(ws.connectionTimeout);
+        }
+        
         if (ws.playerId) {
             console.log(`玩家 ${ws.playerId} 断开连接`);
             gameState.players.delete(ws.playerId);
+            gameState.clientPing.delete(ws.playerId);
+            gameState.clientUpdateRates.delete(ws.playerId);
+            // messageQueue.delete(ws.playerId); // 已移除消息队列
+            
             broadcast({
                 type: 'playerLeft',
                 playerId: ws.playerId
             });
         }
     });
+    
+    ws.on('error', (error) => {
+        console.error('WebSocket错误:', error);
+    });
+    
+    // 发送连接确认
+    ws.send(JSON.stringify({
+        type: 'connected',
+        serverTime: Date.now(),
+        maxMessageSize: 1024 * 10
+    }));
 });
+
+// 心跳检测系统 - 修复版本
+const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach(ws => {
+        if (ws.isAlive === false) {
+            console.log('客户端心跳超时，断开连接');
+            ws.terminate();
+            return;
+        }
+        
+        ws.isAlive = false;
+        
+        // 发送ping
+        if (ws.readyState === WebSocket.OPEN) {
+            try {
+                ws.ping();
+            } catch (error) {
+                console.error('发送ping失败:', error);
+                ws.terminate();
+            }
+        }
+    });
+}, 60000); // 60秒检测一次心跳，更宽松
+
+// pong响应现在在connection事件中为每个客户端单独注册
 
 // 处理客户端消息
 function handleMessage(ws, message) {
@@ -611,11 +1644,56 @@ function handleMessage(ws, message) {
                 broadcast(chatMessage);
             }
             break;
+            
+        case 'ping':
+            // 处理ping检测和网络质量分析 - 增强版
+            const serverTime = Date.now();
+            const clientPing = serverTime - message.timestamp;
+            
+            // 更新客户端ping记录和网络质量评估
+            if (ws.playerId) {
+                gameState.clientPing.set(ws.playerId, clientPing);
+                
+                // 评估网络质量
+                let networkQuality;
+                if (clientPing < 50) {
+                    networkQuality = 'excellent';
+                } else if (clientPing < 100) {
+                    networkQuality = 'good';
+                } else if (clientPing < 200) {
+                    networkQuality = 'medium';
+                } else {
+                    networkQuality = 'poor';
+                }
+                
+                gameState.clientNetworkQuality.set(ws.playerId, networkQuality);
+                
+                // 计算客户端更新率
+                const lastPingTime = ws.lastPingTime || serverTime;
+                const pingInterval = serverTime - lastPingTime;
+                ws.lastPingTime = serverTime;
+                
+                if (pingInterval > 0) {
+                    const updateRate = 1000 / pingInterval;
+                    gameState.clientUpdateRates.set(ws.playerId, updateRate);
+                }
+            }
+            
+            const pongMessage = {
+                type: 'pong',
+                timestamp: message.timestamp,
+                serverTime: serverTime,
+                clientPing: clientPing,
+                networkQuality: gameState.clientNetworkQuality.get(ws.playerId) || 'good'
+            };
+            ws.send(JSON.stringify(pongMessage));
+            break;
     }
 }
 
 // 处理玩家加入
 function handleJoin(ws, message) {
+    console.log('处理玩家加入请求:', message);
     const { nickname } = message;
     const playerId = gameState.nextPlayerId++;
     
@@ -666,12 +1744,12 @@ function handleJoin(ws, message) {
     gameState.players.set(playerId, player);
     ws.playerId = playerId;
     
-    // 发送玩家ID
-    ws.send(JSON.stringify({
-        type: 'joined',
-        playerId: playerId,
-        gameConfig: GAME_CONFIG
-    }));
+    // 发送玩家ID和配置（二进制）
+    try {
+        ws.send(encodeJoined(playerId));
+    } catch (e) {
+        console.error('发送JOINED失败:', e);
+    }
     
     // 广播新玩家加入
     broadcast({
@@ -690,41 +1768,12 @@ function handleJoin(ws, message) {
         }
     }, playerId);
     
-    // 发送当前游戏状态
-    const gameStateData = {
-        type: 'gameState',
-        players: Array.from(gameState.players.values()).map(p => ({
-            id: p.id,
-            nickname: p.nickname,
-            x: p.x,
-            y: p.y,
-            angle: p.angle,
-            health: p.health,
-            score: p.score,
-            isAlive: p.isAlive,
-            color: p.color,
-            powerups: p.powerups
-        })),
-        bullets: gameState.bullets.map(b => ({
-            id: b.id,
-            x: b.x,
-            y: b.y,
-            vx: b.vx,
-            vy: b.vy,
-            ownerId: b.ownerId
-        })),
-        powerups: gameState.powerups.map(p => ({
-            id: p.id,
-            type: p.type,
-            x: p.x,
-            y: p.y,
-            color: p.getColor(),
-            icon: p.getIcon()
-        })),
-        terrain: gameState.terrain
-    };
-    
-    ws.send(JSON.stringify(gameStateData));
+    // 发送当前游戏完整状态（二进制）
+    try {
+        ws.send(encodeInitialGameState(gameState));
+    } catch (e) {
+        console.error('发送初始游戏状态失败:', e);
+    }
     
     console.log(`玩家 ${nickname} (ID: ${playerId}) 加入游戏`);
 }
@@ -743,15 +1792,6 @@ function handleMove(ws, message) {
     // 使用新的move方法，包含碰撞检测
     player.move(dx, dy);
     player.angle = angle;
-    
-    // 广播移动信息
-    broadcast({
-        type: 'playerMove',
-        playerId: player.id,
-        x: player.x,
-        y: player.y,
-        angle: player.angle
-    });
 }
 
 // 处理射击
@@ -764,6 +1804,20 @@ function handleShoot(ws, message) {
     }
     
     const { targetX, targetY } = message;
+    
+    // 服务器端防重复射击检查（轻量去重，避免网络抖动导致的重复帧）
+    const now = Date.now();
+    if (!gameState.lastShootRequests) {
+        gameState.lastShootRequests = new Map();
+    }
+    const lastShootTime = gameState.lastShootRequests.get(ws.playerId) || 0;
+    // 50ms 窗口内的重复消息直接丢弃（远小于服务器射击冷却200ms）
+    if (now - lastShootTime < 50) {
+        console.log('短时间重复射击消息，已去重');
+        return;
+    }
+    gameState.lastShootRequests.set(ws.playerId, now);
+    
     console.log(`玩家 ${player.nickname} 射击到 (${targetX}, ${targetY})`);
     
     const bullet = player.shoot(targetX, targetY);
@@ -772,18 +1826,8 @@ function handleShoot(ws, message) {
         gameState.bullets.push(bullet);
         console.log(`子弹创建成功: ID=${bullet.id}, 位置=(${bullet.x}, ${bullet.y}), 速度=(${bullet.vx}, ${bullet.vy})`);
         
-        // 广播子弹信息
-        broadcast({
-            type: 'bulletShot',
-            bullet: {
-                id: bullet.id,
-                x: bullet.x,
-                y: bullet.y,
-                vx: bullet.vx,
-                vy: bullet.vy,
-                ownerId: bullet.ownerId
-            }
-        });
+        // 子弹将通过游戏状态更新自动发送给客户端，无需重复广播
+        console.log('子弹已加入游戏状态，将在下次更新中发送给所有客户端');
     } else {
         console.log('子弹创建失败: 可能还在冷却中');
     }
@@ -1085,10 +2129,142 @@ function checkPowerupPickup() {
     });
 }
 
-// 游戏主循环
-function gameLoop() {
-    const loopTime = Date.now();
+// 子弹碰撞处理函数
+function processBulletCollisions(bullet) {
+    // 检查子弹边界
+    if (bullet.x <= 0 || bullet.x >= GAME_CONFIG.CANVAS_WIDTH ||
+        bullet.y <= 0 || bullet.y >= GAME_CONFIG.CANVAS_HEIGHT) {
+        return false; // 移除子弹
+    }
     
+    // 检查地形碰撞
+    const bulletSize = GAME_CONFIG.BULLET_SIZE;
+    const nextX = bullet.x + bullet.vx;
+    const nextY = bullet.y + bullet.vy;
+    
+    if (checkTerrainCollision(nextX - bulletSize / 2, nextY - bulletSize / 2, bulletSize, bulletSize)) {
+        broadcast({
+            type: 'bulletHitWall',
+            x: bullet.x,
+            y: bullet.y,
+            bulletId: bullet.id
+        });
+        return false; // 移除子弹
+    }
+    
+    // 检查玩家碰撞
+    let bulletHitPlayer = false;
+    const shooter = gameState.players.get(bullet.ownerId);
+    
+    gameState.players.forEach(player => {
+        if (player.id !== bullet.ownerId && player.isAlive) {
+            const dx = bullet.x - (player.x + GAME_CONFIG.PLAYER_SIZE / 2);
+            const dy = bullet.y - (player.y + GAME_CONFIG.PLAYER_SIZE / 2);
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance < (GAME_CONFIG.PLAYER_SIZE / 2 + GAME_CONFIG.BULLET_SIZE / 2)) {
+                let damage = bullet.damage || 25;
+                
+                if (shooter && shooter.powerups.damageBoost && shooter.powerups.damageBoost.active) {
+                    damage = Math.floor(damage * 1.5);
+                }
+                
+                const wasAlive = player.isAlive;
+                player.takeDamage(damage);
+                
+                if (shooter) {
+                    if (wasAlive && !player.isAlive) {
+                        shooter.score = Math.min(65535, (shooter.score || 0) + 100);
+                        const killInfo = {
+                            killer: shooter.nickname,
+                            victim: player.nickname,
+                            weapon: '枪械',
+                            timestamp: Date.now()
+                        };
+                        gameState.killFeed.push(killInfo);
+                        
+                        broadcast({
+                            type: 'killFeed',
+                            killInfo: killInfo
+                        });
+                    } else {
+                        shooter.score = Math.min(65535, (shooter.score || 0) + 10);
+                    }
+                }
+                
+                broadcast({
+                    type: 'playerHit',
+                    targetId: player.id,
+                    shooterId: bullet.ownerId,
+                    damage: damage,
+                    isKill: wasAlive && !player.isAlive
+                });
+                
+                bulletHitPlayer = true;
+            }
+        }
+    });
+    
+    return !bulletHitPlayer; // 击中玩家则移除子弹
+}
+
+// 结束游戏
+function endGame() {
+    console.log('游戏结束');
+    gameState.isGameEnded = true;
+    gameState.showingResults = true;
+    gameState.countdown = 5; // 5秒结果展示
+    gameState.countdownStartTime = Date.now();
+    
+    // 获取最终排行榜
+    const finalPlayers = getPlayersList();
+    
+    // 广播游戏结束
+    broadcast({
+        type: 'gameEnd',
+        countdown: gameState.countdown,
+        showingResults: true,
+        players: finalPlayers,
+        killFeed: gameState.killFeed.slice(-10),
+        terrain: gameState.terrain
+    });
+}
+
+// 重置游戏状态
+function resetGameState() {
+    console.log('重置游戏状态');
+    gameState.gameStartTime = Date.now();
+    gameState.isGameEnded = false;
+    gameState.showingResults = false;
+    gameState.countdown = 0;
+    
+    // 重置所有玩家
+    gameState.players.forEach(player => {
+        player.health = GAME_CONFIG.MAX_HEALTH;
+        player.score = 0;
+        player.isAlive = true;
+        player.respawnTime = 0;
+        player.respawn();
+        
+        // 清除所有道具效果
+        Object.keys(player.powerups).forEach(key => {
+            player.powerups[key].active = false;
+            player.powerups[key].endTime = 0;
+        });
+    });
+    
+    // 清空子弹和击杀记录
+    gameState.bullets = [];
+    gameState.killFeed = [];
+    
+    // 重新生成道具
+    gameState.powerups = [];
+    
+    console.log('游戏状态重置完成');
+}
+
+// 游戏状态管理函数（从原gameLoop提取）
+function updateGameCountdown() {
     // 处理倒计时逻辑（基于实际时间）
     if (gameState.countdown > 0) {
         const currentTime = Date.now();
@@ -1099,18 +2275,57 @@ function gameLoop() {
         // 更新倒计时显示
         if (remainingSeconds !== gameState.countdown) {
             gameState.countdown = remainingSeconds;
+            
+            // 广播倒计时更新给所有客户端
+            if (gameState.showingResults) {
+                // 游戏结束倒计时更新
+                broadcast({
+                    type: 'gameEnd',
+                    countdown: gameState.countdown,
+                    showingResults: true,
+                    players: getPlayersWithBuffs(),
+                    killFeed: gameState.killFeed.slice(-10),
+                    terrain: gameState.terrain
+                });
+            } else {
+                // 新游戏开始倒计时更新
+                broadcast({
+                    type: 'newGameStart',
+                    countdown: gameState.countdown,
+                    players: getPlayersWithBuffs(),
+                    terrain: gameState.terrain
+                });
+            }
+            console.log(`倒计时更新: ${gameState.countdown}秒 (${gameState.showingResults ? '结果展示' : '新游戏开始'})`);
         }
         
         if (gameState.countdown <= 0) {
             if (gameState.showingResults) {
-                // 排行榜展示时间结束，直接开始新游戏
+                // 排行榜展示时间结束，开始新游戏倒计时
+                console.log('结果展示倒计时结束，开始新游戏倒计时');
                 gameState.showingResults = false;
+                gameState.countdown = 3; // 3秒新游戏开始倒计时
+                gameState.countdownStartTime = Date.now();
+                
+                // 广播新游戏开始倒计时
+                console.log('发送 newGameStart 消息，倒计时:', gameState.countdown);
+                broadcast({
+                    type: 'newGameStart',
+                    countdown: gameState.countdown,
+                    players: getPlayersWithBuffs(),
+                    terrain: gameState.terrain
+                });
+                return;
+            } else {
+                // 新游戏倒计时结束，正式开始游戏
+                console.log('新游戏倒计时结束，正式开始游戏');
                 gameState.isGameEnded = false;
                 
                 // 重置游戏状态
                 resetGameState();
                 
                 // 广播游戏正式开始
+                console.log('发送 gameStarted 消息');
                 broadcast({
                     type: 'gameStarted',
                     players: getPlayersWithBuffs(),
@@ -1121,223 +2336,153 @@ function gameLoop() {
         }
     }
     
-    // 蒙版关闭延迟逻辑已移除，游戏结束5秒后直接开始新游戏
-    
-    if (!gameState.isGameEnded) {
-        // 检查游戏时间
-        const elapsedTime = loopTime - gameState.gameStartTime;
-        const remainingTime = Math.max(0, gameState.gameDuration - elapsedTime);
+}
+
+// 游戏逻辑和网络推送分离
+let gameLogicInterval = 33; // 游戏逻辑30FPS，稳定计算
+let networkUpdateInterval = 16; // 网络推送60FPS，流畅同步
+let lastPerformanceCheck = Date.now();
+let frameCount = 0;
+let adaptiveCounter = 0;
+
+// 游戏逻辑更新函数（独立于渲染）
+function updateGameLogic() {
+    const now = Date.now();
+    const deltaTime = gameState.lastGameLogicUpdate ? now - gameState.lastGameLogicUpdate : gameLogicInterval;
+    gameState.lastGameLogicUpdate = now;
+
+    // 如果没有玩家，游戏保持停止状态
+    if (gameState.players.size === 0) {
+        if (!gameState.isGameEnded) {
+            gameState.isGameEnded = true;
+            gameState.gameStartTime = null;
+        }
+        return;
+    }
+
+    // 如果有玩家但游戏未开始，开始游戏
+    if (gameState.isGameEnded && gameState.players.size > 0 && !gameState.gameStartTime) {
+        console.log('有玩家加入，开始新游戏');
+        gameState.gameStartTime = now;
+        gameState.isGameEnded = false;
+    }
+
+    // 检查游戏时间
+    if (!gameState.isGameEnded && gameState.gameStartTime) {
+        const remainingTime = gameState.gameDuration - (now - gameState.gameStartTime);
         
-        // 如果时间到了，结束游戏
         if (remainingTime <= 0) {
+            console.log('游戏时间结束，触发endGame()');
             endGame();
             return;
         }
     }
     
+    // 计算delta时间
+    const currentTime = Date.now();
+    const playerDeltaTime = gameState.lastUpdateTime ? currentTime - gameState.lastUpdateTime : gameLogicInterval;
+    gameState.lastUpdateTime = currentTime;
+    
     // 更新玩家
     gameState.players.forEach(player => {
-        player.update();
+        player.update(playerDeltaTime);
     });
     
     // 更新子弹
     gameState.bullets = gameState.bullets.filter(bullet => {
-        // 检查生命周期
-        bullet.life--;
+        bullet.update(playerDeltaTime);
         if (bullet.life <= 0) {
-            return false; // 移除子弹
+            return false;
         }
         
-        // 检查子弹下一个位置是否会擞墙
-        const nextX = bullet.x + bullet.vx;
-        const nextY = bullet.y + bullet.vy;
-        
-        // 检查边界
-        if (nextX <= 0 || nextX >= GAME_CONFIG.CANVAS_WIDTH ||
-            nextY <= 0 || nextY >= GAME_CONFIG.CANVAS_HEIGHT) {
-            return false; // 移除子弹
-        }
-        
-        // 检查地形碰撞 - 简化但更可靠的检测
-        const bulletSize = GAME_CONFIG.BULLET_SIZE;
-        const checkX = nextX - bulletSize / 2;
-        const checkY = nextY - bulletSize / 2;
-        
-        if (checkTerrainCollision(checkX, checkY, bulletSize, bulletSize)) {
-            // 广播子弹击中墙体特效
-            console.log(`子弹击中墙体: (${bullet.x}, ${bullet.y}) -> (${nextX}, ${nextY})`);
-            broadcast({
-                type: 'bulletHitWall',
-                x: bullet.x,
-                y: bullet.y
-            });
-            return false; // 移除子弹
-        }
-        
-        // 如果通过了所有检查，更新位置
-        bullet.x = nextX;
-        bullet.y = nextY;
-        
-        // 检查子弹与玩家碰撞
-        if (bullet.ownerId) {
-            gameState.players.forEach(player => {
-                if (player.id !== bullet.ownerId && player.isAlive) {
-                    const bulletRect = {
-                        x: bullet.x - GAME_CONFIG.BULLET_SIZE / 2,
-                        y: bullet.y - GAME_CONFIG.BULLET_SIZE / 2,
-                        width: GAME_CONFIG.BULLET_SIZE,
-                        height: GAME_CONFIG.BULLET_SIZE
-                    };
-                    
-                    const playerRect = {
-                        x: player.x,
-                        y: player.y,
-                        width: GAME_CONFIG.PLAYER_SIZE,
-                        height: GAME_CONFIG.PLAYER_SIZE
-                    };
-                    
-                    if (checkCollision(bulletRect, playerRect)) {
-                        // 计算伤害
-                        let damage = bullet.damage;
-                        const shooter = gameState.players.get(bullet.ownerId);
-                        if (shooter && shooter.powerups.damageBoost.active) {
-                            damage = Math.floor(damage * 1.5); // 伤害提升50%
-                        }
-                        
-                        const wasAlive = player.isAlive;
-                        player.takeDamage(damage);
-                        
-                        // 增加射击者分数
-                        if (shooter) {
-                            if (wasAlive && !player.isAlive) {
-                                // 击杀
-                                shooter.score += 100;
-                                // 添加击杀信息
-                                const killInfo = {
-                                    killer: shooter.nickname,
-                                    victim: player.nickname,
-                                    weapon: '枪械',
-                                    timestamp: Date.now()
-                                };
-                                gameState.killFeed.push(killInfo);
-                                
-                                // 立即广播击杀信息
-                                broadcast({
-                                    type: 'killFeed',
-                                    killInfo: killInfo
-                                });
-                            } else {
-                                // 击中但未击杀
-                                shooter.score += 10;
-                            }
-                        }
-                        
-                        // 广播击中事件
-                        broadcast({
-                            type: 'playerHit',
-                            targetId: player.id,
-                            shooterId: bullet.ownerId,
-                            damage: damage,
-                            isKill: wasAlive && !player.isAlive
-                        });
-                        
-                        return false; // 移除子弹
-                    }
-                }
-            });
-        }
-        
-        // 检查子弹边界和生命周期
-        if (bullet.life <= 0 || 
-            bullet.x <= 0 || bullet.x >= GAME_CONFIG.CANVAS_WIDTH ||
-            bullet.y <= 0 || bullet.y >= GAME_CONFIG.CANVAS_HEIGHT) {
-            return false; // 移除子弹
-        }
-        
-        return true; // 保留子弹
+        // 子弹物理更新（碰撞检测等）
+        return processBulletCollisions(bullet);
     });
     
     // 检查道具拾取
     checkPowerupPickup();
     
-    // 广播游戏状态更新
-    const gameTime = Date.now();
-    const elapsedTime = gameTime - gameState.gameStartTime;
-    const remainingTime = Math.max(0, gameState.gameDuration - elapsedTime);
+    // 更新游戏倒计时
+    updateGameCountdown();
+}
+
+// 网络状态推送函数（独立于游戏逻辑）
+function broadcastGameState() {
+    // 统一使用二进制的完整游戏状态更新，确保客户端高效同步
+    const updateMessage = { type: 'gameUpdate' };
+    broadcast(updateMessage, null, 3);
     
-    const gameUpdateMessage = {
-        type: 'gameUpdate',
-        players: getPlayersWithBuffs(),
-        bullets: gameState.bullets,
-        powerups: gameState.powerups,
-        terrain: gameState.terrain,
-        remainingTime: remainingTime,
-        isGameEnded: gameState.isGameEnded
-    };
+    // 更新计数器
+    gameState.updateCounter++;
+}
+
+// 性能监控和自适应调整
+function adaptiveGameLoop() {
+    const now = Date.now();
+    frameCount++;
+    adaptiveCounter++;
     
-    // 只有在倒计时大于0时才发送倒计时信息
-    if (gameState.countdown > 0) {
-        gameUpdateMessage.countdown = gameState.countdown;
-        gameUpdateMessage.showingResults = gameState.showingResults;
+    // 每5秒检查一次性能
+    if (now - lastPerformanceCheck > 5000) {
+        const averagePing = Array.from(gameState.clientPing.values()).reduce((a, b) => a + b, 0) / gameState.clientPing.size || 50;
+        const playerCount = gameState.players.size;
+        const poorNetworkCount = Array.from(gameState.clientNetworkQuality.values()).filter(q => q === 'poor').length;
+        
+        // 游戏逻辑保持30FPS稳定
+        gameLogicInterval = 33;
+        
+        // 根据网络状况调整推送频率
+        if (poorNetworkCount > playerCount * 0.5) {
+            networkUpdateInterval = 25; // 40FPS for poor network
+        } else if (averagePing > 200) {
+            networkUpdateInterval = 20; // 50FPS for high latency
+        } else {
+            networkUpdateInterval = 16; // 60FPS for good network
+        }
+        
+        console.log(`游戏逻辑: ${Math.round(1000/gameLogicInterval)}FPS, 网络推送: ${Math.round(1000/networkUpdateInterval)}FPS (Ping: ${Math.round(averagePing)}ms, 玩家: ${playerCount})`);
+        
+        lastPerformanceCheck = now;
+        frameCount = 0;
     }
     
-    broadcast(gameUpdateMessage);
+    // 继续循环
+    setTimeout(adaptiveGameLoop, Math.min(gameLogicInterval, networkUpdateInterval));
 }
 
-// 游戏结束函数
-function endGame() {
-    gameState.isGameEnded = true;
-    gameState.countdown = 5; // 5秒展示排行榜时间
-    gameState.showingResults = true; // 标记正在展示结果
-    gameState.countdownStartTime = Date.now(); // 设置倒计时开始时间
-    
-    // 广播游戏结束消息
-    broadcast({
-        type: 'gameEnd',
-        players: getPlayersWithBuffs(),
-        killFeed: gameState.killFeed.slice(-10),
-        countdown: gameState.countdown,
-        showingResults: gameState.showingResults
+// 启动批处理清理定时器
+setInterval(() => {
+    // 清理空的消息队列
+    gameState.messageQueue.forEach((queue, playerId) => {
+        if (queue.length === 0) {
+            gameState.messageQueue.delete(playerId);
+        }
     });
-}
+    
+    // 清理压缩缓存
+    if (gameState.compressionCache.size > 100) {
+        gameState.compressionCache.clear();
+    }
+}, 30000); // 每30秒清理一次
 
-// 重置游戏状态（游戏结束后直接开始新游戏时调用）
-function resetGameState() {
-    gameState.gameStartTime = Date.now();
+// 启动分离的游戏循环
+function startGameSystems() {
+    // 游戏逻辑循环 - 30FPS稳定
+    setInterval(updateGameLogic, gameLogicInterval);
     
-    // 重置所有玩家
-    gameState.players.forEach(player => {
-        player.score = 0;
-        player.health = GAME_CONFIG.MAX_HEALTH;
-        player.isAlive = true;
-        player.respawnTime = 0; // 重置复活时间
-        player.powerups = {
-            shield: { active: false, endTime: 0 },
-            rapidFire: { active: false, endTime: 0 },
-            damageBoost: { active: false, endTime: 0 }
-        };
-        
-        // 随机重置位置
-        player.x = Math.random() * (GAME_CONFIG.CANVAS_WIDTH - GAME_CONFIG.PLAYER_SIZE);
-        player.y = Math.random() * (GAME_CONFIG.CANVAS_HEIGHT - GAME_CONFIG.PLAYER_SIZE);
-    });
+    // 网络推送循环 - 60FPS流畅
+    setInterval(broadcastGameState, networkUpdateInterval);
     
-    // 清空子弹和道具
-    gameState.bullets = [];
-    gameState.powerups = [];
-    
-    // 清空击杀信息
-    gameState.killFeed = [];
-    
-    // 重新生成地形
-    gameState.terrain = generateTerrain();
+    // 性能监控和自适应调整
+    adaptiveGameLoop();
 }
 
 // 初始化地形
 gameState.terrain = generateTerrain();
+console.log(`地形初始化完成，生成了 ${gameState.terrain.length} 个地形块`);
 
-// 启动游戏循环
-setInterval(gameLoop, 16); // 约60FPS
+// 启动游戏系统
+startGameSystems();
 
 // 启动道具生成定时器
 setInterval(spawnPowerup, GAME_CONFIG.POWERUP_SPAWN_INTERVAL);
