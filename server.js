@@ -4,7 +4,13 @@ const fs = require('fs');
 const path = require('path');
 const compression = require('compression');
 const zlib = require('zlib');
-
+// 静默服务器日志以提升性能（如需调试，可改为 false）
+const SILENCE_LOGS = true;
+if (SILENCE_LOGS) {
+    console.log = () => {};
+    console.info = () => {};
+    console.debug = () => {};
+}
 // 创建HTTP服务器
 const server = http.createServer((req, res) => {
     // 使用压缩中间件
