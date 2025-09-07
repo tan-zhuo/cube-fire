@@ -768,28 +768,43 @@ class Player {
     move(dx, dy) {
         if (!this.isAlive) return;
         
-        const newX = this.x + dx;
-        const newY = this.y + dy;
-        const playerSize = GAME_CONFIG.PLAYER_SIZE;
+        const size = GAME_CONFIG.PLAYER_SIZE;
+        let movedX = false, movedY = false;
         
-        // 检查边界碰撞
-        if (newX < 0 || newX + playerSize > GAME_CONFIG.CANVAS_WIDTH ||
-            newY < 0 || newY + playerSize > GAME_CONFIG.CANVAS_HEIGHT) {
-            return;
+        // 先沿X轴尝试移动（轴向分离），如果不碰撞则更新X
+        if (dx !== 0) {
+            const tryX = this.x + dx;
+            const outOfBoundsX = (tryX < 0 || tryX + size > GAME_CONFIG.CANVAS_WIDTH);
+            if (!outOfBoundsX && !checkTerrainCollision(tryX, this.y, size, size)) {
+                this.x = tryX;
+                this.vx = dx;
+                movedX = true;
+            } else {
+                this.vx = 0;
+            }
+        } else {
+            this.vx = 0;
         }
         
-        // 检查地形碰撞
-        if (checkTerrainCollision(newX, newY, playerSize, playerSize)) {
-            return;
+        // 再沿Y轴尝试移动
+        if (dy !== 0) {
+            const tryY = this.y + dy;
+            const outOfBoundsY = (tryY < 0 || tryY + size > GAME_CONFIG.CANVAS_HEIGHT);
+            if (!outOfBoundsY && !checkTerrainCollision(this.x, tryY, size, size)) {
+                this.y = tryY;
+                this.vy = dy;
+                movedY = true;
+            } else {
+                this.vy = 0;
+            }
+        } else {
+            this.vy = 0;
         }
         
-        // 更新位置和移动状态
-        this.x = newX;
-        this.y = newY;
-        this.vx = dx;
-        this.vy = dy;
-        this.isMoving = true;
-        this.lastMoveTime = Date.now();
+        this.isMoving = movedX || movedY;
+        if (this.isMoving) {
+            this.lastMoveTime = Date.now();
+        }
     }
 
     respawn() {
@@ -971,7 +986,7 @@ class Player {
                 const killInfo = {
                     killer: this.nickname,
                     victim: hitPlayer.nickname,
-                    weapon: '近战',
+                    weapon: '刀了',
                     timestamp: Date.now()
                 };
                 gameState.killFeed.push(killInfo);
@@ -2518,7 +2533,7 @@ function processBulletCollisions(bullet) {
                         const killInfo = {
                             killer: shooter.nickname,
                             victim: player.nickname,
-                            weapon: '枪械',
+                            weapon: '射杀',
                             timestamp: Date.now()
                         };
                         gameState.killFeed.push(killInfo);

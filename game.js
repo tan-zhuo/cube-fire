@@ -413,7 +413,10 @@ class GameClient {
         this.moveUpdateInterval = 1000 / 60; // 60fps发送频率，与服务器同步
         
         // 添加插值平滑参数
-        this.interpolationFactor = 0.1; // 插值系数，用于平滑其他玩家的移动
+        this.interpolationFactor = 0.25; // 他人包时位置插值（减少漂移）
+        this.otherFrameLerp = 0.2;       // 他人按帧平滑靠拢系数
+        this.extrapolationDelayMs = 150; // 超过该间隔未收到新包开始外推
+        this.extrapolationMaxMs = 200;   // 外推封顶时长，避免漂移过远
         this.lastServerTime = 0;
         
         this.setupCanvas();
@@ -839,7 +842,17 @@ class GameClient {
                 // 应用状态
                 if (isSnapshot) {
                     this.players.clear();
-                    players.forEach(p => this.players.set(p.id, p));
+                    const nowTs = Date.now();
+                    players.forEach(p => {
+                        p.targetX = p.x;
+                        p.targetY = p.y;
+                        p.lastServerX = p.x;
+                        p.lastServerY = p.y;
+                        p.lastServerUpdate = nowTs;
+                        p.serverVx = 0;
+                        p.serverVy = 0;
+                        this.players.set(p.id, p);
+                    });
                     this.updateScoreboard();
                 } else {
                     this.updatePlayersFromServer(players);
@@ -873,6 +886,7 @@ class GameClient {
                             const score = decoder.readUint16();
                             const isAlive = decoder.readUint8() === 1;
                             const color = decoder.readString();
+                            const nowTs = Date.now();
                             this.players.set(id, {
                                 id,
                                 nickname,
@@ -883,7 +897,14 @@ class GameClient {
                                 score,
                                 isAlive,
                                 color,
-                                powerups: { shield: {active:false}, rapidFire:{active:false}, damageBoost:{active:false} }
+                                powerups: { shield: {active:false}, rapidFire:{active:false}, damageBoost:{active:false} },
+                                targetX: x,
+                                targetY: y,
+                                lastServerX: x,
+                                lastServerY: y,
+                                lastServerUpdate: nowTs,
+                                serverVx: 0,
+                                serverVy: 0
                             });
                         }
                     } else if (section === 0x02) { // changedPlayers
@@ -891,33 +912,60 @@ class GameClient {
                         for (let i = 0; i < n; i++) {
                             const id = decoder.readUint32();
                             const mask = decoder.readUint8();
-                            const p = this.players.get(id) || { id };
-                            if (mask & 0x01) p.x = decoder.readUint16();
-                            if (mask & 0x02) p.y = decoder.readUint16();
-                            if (mask & 0x04) p.angle = decoder.readUint16() / 100;
-                            if (mask & 0x08) p.health = decoder.readUint8();
-                            if (mask & 0x10) p.score = decoder.readUint16();
-                            if (mask & 0x20) p.isAlive = decoder.readUint8() === 1;
+                            const cur = this.players.get(id) || { id };
+                            const factorSelf = 0.35;
+                            const fSelf = factorSelf;
+                            let nx, ny, nAngle;
+                            if (mask & 0x01) nx = decoder.readUint16();
+                            if (mask & 0x02) ny = decoder.readUint16();
+                            if (mask & 0x04) nAngle = decoder.readUint16() / 100;
+                            if (mask & 0x08) cur.health = decoder.readUint8();
+                            if (mask & 0x10) cur.score = decoder.readUint16();
+                            if (mask & 0x20) cur.isAlive = decoder.readUint8() === 1;
+                            // 更新目标位置与服务器速度估计
+                            const nowTs = Date.now();
+                            const prevX = cur.lastServerX !== undefined ? cur.lastServerX : (cur.x !== undefined ? cur.x : nx);
+                            const prevY = cur.lastServerY !== undefined ? cur.lastServerY : (cur.y !== undefined ? cur.y : ny);
+                            if (nx !== undefined) cur.targetX = nx;
+                            if (ny !== undefined) cur.targetY = ny;
+                            const useX = (nx !== undefined) ? nx : prevX;
+                            const useY = (ny !== undefined) ? ny : prevY;
+                            const dt = Math.max(0, nowTs - (cur.lastServerUpdate || nowTs));
+                            if (dt > 0 && (nx !== undefined || ny !== undefined)) {
+                                cur.serverVx = (useX - prevX) / dt;
+                                cur.serverVy = (useY - prevY) / dt;
+                            }
+                            cur.lastServerX = useX;
+                            cur.lastServerY = useY;
+                            cur.lastServerUpdate = nowTs;
+                            // 仅本地玩家立即做一次纠偏；其他玩家留给按帧平滑处理
+                            if (id === this.playerId) {
+                                if (nx !== undefined && cur.x !== undefined) cur.x = cur.x + (nx - cur.x) * fSelf; else if (nx !== undefined) cur.x = nx;
+                                if (ny !== undefined && cur.y !== undefined) cur.y = cur.y + (ny - cur.y) * fSelf; else if (ny !== undefined) cur.y = ny;
+                                if (nAngle !== undefined) cur.angle = nAngle;
+                            } else {
+                                if (nAngle !== undefined) cur.angle = nAngle;
+                            }
                             if (mask & 0x40) {
                                 const now = Date.now();
-                                p.powerups = p.powerups || { shield:{}, rapidFire:{}, damageBoost:{} };
+                                cur.powerups = cur.powerups || { shield:{}, rapidFire:{}, damageBoost:{} };
                                 // shield
                                 const sActive = decoder.readUint8() === 1;
                                 const sRem = decoder.readUint16();
-                                p.powerups.shield.active = sActive;
-                                p.powerups.shield.endTime = sActive ? now + sRem * 1000 : 0;
+                                cur.powerups.shield.active = sActive;
+                                cur.powerups.shield.endTime = sActive ? now + sRem * 1000 : 0;
                                 // rapid
                                 const rActive = decoder.readUint8() === 1;
                                 const rRem = decoder.readUint16();
-                                p.powerups.rapidFire.active = rActive;
-                                p.powerups.rapidFire.endTime = rActive ? now + rRem * 1000 : 0;
+                                cur.powerups.rapidFire.active = rActive;
+                                cur.powerups.rapidFire.endTime = rActive ? now + rRem * 1000 : 0;
                                 // damage
                                 const dActive = decoder.readUint8() === 1;
                                 const dRem = decoder.readUint16();
-                                p.powerups.damageBoost.active = dActive;
-                                p.powerups.damageBoost.endTime = dActive ? now + dRem * 1000 : 0;
+                                cur.powerups.damageBoost.active = dActive;
+                                cur.powerups.damageBoost.endTime = dActive ? now + dRem * 1000 : 0;
                             }
-                            this.players.set(id, p);
+                            this.players.set(id, cur);
                         }
                     } else if (section === 0x03) { // newBullets
                         const n = decoder.readUint16();
@@ -1171,10 +1219,36 @@ class GameClient {
         serverPlayers.forEach(serverPlayer => {
             const localPlayer = this.players.get(serverPlayer.id);
             if (localPlayer) {
-                // 同步位置与姿态
-                if (typeof serverPlayer.x === 'number') localPlayer.x = serverPlayer.x;
-                if (typeof serverPlayer.y === 'number') localPlayer.y = serverPlayer.y;
-                if (typeof serverPlayer.angle === 'number') localPlayer.angle = serverPlayer.angle;
+                const nowTs = Date.now();
+                if (serverPlayer.id === this.playerId) {
+                    // 本地玩家：做一次较大的纠偏
+                    const factorSelf = 0.35;
+                    if (typeof serverPlayer.x === 'number') {
+                        localPlayer.x = localPlayer.x + (serverPlayer.x - localPlayer.x) * factorSelf;
+                    }
+                    if (typeof serverPlayer.y === 'number') {
+                        localPlayer.y = localPlayer.y + (serverPlayer.y - localPlayer.y) * factorSelf;
+                    }
+                } else {
+                    // 他人：只更新目标与服务器速度估计，具体位置交给按帧平滑
+                    const prevX = localPlayer.lastServerX !== undefined ? localPlayer.lastServerX : (localPlayer.x ?? serverPlayer.x);
+                    const prevY = localPlayer.lastServerY !== undefined ? localPlayer.lastServerY : (localPlayer.y ?? serverPlayer.y);
+                    if (typeof serverPlayer.x === 'number') localPlayer.targetX = serverPlayer.x;
+                    if (typeof serverPlayer.y === 'number') localPlayer.targetY = serverPlayer.y;
+                    const useX = (typeof serverPlayer.x === 'number') ? serverPlayer.x : prevX;
+                    const useY = (typeof serverPlayer.y === 'number') ? serverPlayer.y : prevY;
+                    const dt = Math.max(0, nowTs - (localPlayer.lastServerUpdate || nowTs));
+                    if (dt > 0 && (serverPlayer.x !== undefined || serverPlayer.y !== undefined)) {
+                        localPlayer.serverVx = (useX - prevX) / dt;
+                        localPlayer.serverVy = (useY - prevY) / dt;
+                    }
+                    localPlayer.lastServerX = useX;
+                    localPlayer.lastServerY = useY;
+                    localPlayer.lastServerUpdate = nowTs;
+                }
+                if (typeof serverPlayer.angle === 'number') {
+                    localPlayer.angle = serverPlayer.angle;
+                }
                 // 其他属性
                 localPlayer.score = serverPlayer.score;
                 localPlayer.health = serverPlayer.health;
@@ -1205,6 +1279,29 @@ class GameClient {
                 mergeBuff('shield');
                 mergeBuff('rapidFire');
                 mergeBuff('damageBoost');
+            } else {
+                // 新玩家：初始化并设置目标位置
+                const nowTs = Date.now();
+                const p = {
+                    id: serverPlayer.id,
+                    nickname: serverPlayer.nickname,
+                    x: serverPlayer.x,
+                    y: serverPlayer.y,
+                    angle: serverPlayer.angle,
+                    health: serverPlayer.health,
+                    score: serverPlayer.score,
+                    isAlive: serverPlayer.isAlive,
+                    color: serverPlayer.color,
+                    powerups: serverPlayer.powerups || { shield:{active:false}, rapidFire:{active:false}, damageBoost:{active:false} },
+                    targetX: serverPlayer.x,
+                    targetY: serverPlayer.y,
+                    lastServerX: serverPlayer.x,
+                    lastServerY: serverPlayer.y,
+                    lastServerUpdate: nowTs,
+                    serverVx: 0,
+                    serverVy: 0
+                };
+                this.players.set(serverPlayer.id, p);
             }
         });
         this.updateScoreboard();
@@ -1634,6 +1731,43 @@ class GameClient {
         // 更新玩家移动
         this.updatePlayerMovement();
         
+        // 他人按帧平滑靠拢 + 轻量外推（减少观众端漂移感）
+        const nowMs = Date.now();
+        const dtMs = Math.max(0, deltaTime);
+        this.players.forEach((p, id) => {
+            if (id === this.playerId) return;
+            if (!p) return;
+            // 初始化目标与时间戳
+            if (p.targetX === undefined) p.targetX = p.x ?? 0;
+            if (p.targetY === undefined) p.targetY = p.y ?? 0;
+            if (p.lastServerUpdate === undefined) p.lastServerUpdate = nowMs;
+            if (p.serverVx === undefined) p.serverVx = 0;
+            if (p.serverVy === undefined) p.serverVy = 0;
+            
+            // 基于服务器速度的短时外推
+            let toX = p.targetX;
+            let toY = p.targetY;
+            const since = Math.max(0, nowMs - p.lastServerUpdate);
+            if (since > this.extrapolationDelayMs && since <= this.extrapolationMaxMs) {
+                toX += p.serverVx * since;
+                toY += p.serverVy * since;
+            }
+            
+            // 按帧平滑靠拢
+            const prevX = p.x;
+            const prevY = p.y;
+            if (typeof p.x === 'number') p.x += (toX - p.x) * this.otherFrameLerp;
+            else p.x = toX;
+            if (typeof p.y === 'number') p.y += (toY - p.y) * this.otherFrameLerp;
+            else p.y = toY;
+            
+            // 更新用于渲染拖尾的速度（每帧位移）
+            if (prevX !== undefined && prevY !== undefined) {
+                p.vx = p.x - prevX;
+                p.vy = p.y - prevY;
+            }
+        });
+        
         // 更新子弹
         this.bullets = this.bullets.filter(bullet => {
             bullet.x += bullet.vx;
@@ -1699,8 +1833,9 @@ class GameClient {
             
             if (hasPositionChange || hasAngleChange) {
                 // 计算新位置但不立即应用
-                const newX = Math.max(0, Math.min(this.canvas.width - playerSize, player.x + dx));
-                const newY = Math.max(0, Math.min(this.canvas.height - playerSize, player.y + dy));
+                const margin = (this.gameConfig && this.gameConfig.TERRAIN_SIZE) ? this.gameConfig.TERRAIN_SIZE : 40;
+                const newX = Math.max(margin, Math.min(this.canvas.width - margin - playerSize, player.x + dx));
+                const newY = Math.max(margin, Math.min(this.canvas.height - margin - playerSize, player.y + dy));
                 
                 // 发送二进制MOVE
                 const enc = new BinaryEncoder().init(32);
@@ -1709,6 +1844,10 @@ class GameClient {
                 enc.writeFloat32(newY);
                 enc.writeFloat32(angle);
                 this.ws.send(enc.getBuffer());
+                
+                // 本地乐观应用（预测）
+                player.x = newX;
+                player.y = newY;
                 
                 // 记录发送时间和角度
                 this.lastMoveUpdate = currentTime;
