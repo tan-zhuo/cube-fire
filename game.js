@@ -99,6 +99,11 @@ class BinaryDecoder {
         this.offset += 4;
         return v;
     }
+    readInt16() {
+        const v = this.view.getInt16(this.offset, true);
+        this.offset += 2;
+        return v;
+    }
     readFloat32() {
         const v = this.view.getFloat32(this.offset, true);
         this.offset += 4;
@@ -368,6 +373,7 @@ class Effect {
         });
     }
 
+
     draw(ctx) {
         this.particles.forEach(particle => particle.draw(ctx));
     }
@@ -418,6 +424,20 @@ class GameClient {
         this.scale = 1;
         this.scaleX = 1;
         this.scaleY = 1;
+
+        // FPS 与网络统计
+        const nowPerf = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        this.frames = 0;
+        this.fps = 0;
+        this.lastFpsTime = nowPerf;
+        this.msgsDownCount = 0; // 每秒收到的消息包数
+        this.msgsUpCount = 0;   // 每秒发送的消息包数
+        this.downRate = 0;      // 显示值：下行消息包/s
+        this.upRate = 0;        // 显示值：上行消息包/s
+        this.lastRateTime = nowPerf;
+        this.pingMs = null;
+        this.networkQuality = 'good';
+        this.pingTimer = null;
     }
 
     setupCanvas() {
@@ -514,6 +534,18 @@ class GameClient {
                 this.joinGame();
             }
         });
+
+        // 聊天发送
+        const chatSendBtn = document.getElementById('chatSend');
+        if (chatSendBtn) {
+            chatSendBtn.addEventListener('click', () => this.sendChatMessage());
+        }
+        const chatInput = document.getElementById('chatInput');
+        if (chatInput) {
+            chatInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') this.sendChatMessage();
+            });
+        }
     }
 
     setupUI() {
@@ -524,63 +556,9 @@ class GameClient {
             document.getElementById('scoreboard').classList.remove('hidden');
             document.getElementById('instructions').classList.remove('hidden');
             document.getElementById('chatroom').classList.remove('hidden');
+            const ns = document.getElementById('networkStatus');
+            if (ns) ns.classList.remove('hidden');
         };
-        
-        // 设置聊天功能
-        this.setupChat();
-    }
-    
-    setupChat() {
-        const chatInput = document.getElementById('chatInput');
-        const chatSend = document.getElementById('chatSend');
-        
-        // 发送消息函数（二进制）
-        const sendMessage = () => {
-            const message = chatInput.value.trim();
-            if (message && this.ws && this.ws.readyState === WebSocket.OPEN) {
-                const enc = new BinaryEncoder().init(2 + message.length + 4);
-                enc.writeUint8(MESSAGE_TYPES.CHAT);
-                enc.writeString(message);
-                this.ws.send(enc.getBuffer());
-                chatInput.value = '';
-            }
-        };
-        
-        // 发送按钮点击事件
-        chatSend.addEventListener('click', sendMessage);
-        
-        // 回车发送消息
-        chatInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                sendMessage();
-            }
-        });
-    }
-    
-    addChatMessage(playerName, content) {
-        const messagesContainer = document.getElementById('chatMessages');
-        const messageDiv = document.createElement('div');
-        messageDiv.className = 'chat-message';
-        
-        const senderSpan = document.createElement('span');
-        senderSpan.className = 'sender';
-        senderSpan.textContent = playerName + ':';
-        
-        const contentSpan = document.createElement('span');
-        contentSpan.className = 'content';
-        contentSpan.textContent = content;
-        
-        messageDiv.appendChild(senderSpan);
-        messageDiv.appendChild(contentSpan);
-        messagesContainer.appendChild(messageDiv);
-        
-        // 自动滚动到底部
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        
-        // 限制消息数量，只保留最新的50条
-        while (messagesContainer.children.length > 50) {
-            messagesContainer.removeChild(messagesContainer.firstChild);
-        }
     }
 
     joinGame() {
@@ -597,6 +575,10 @@ class GameClient {
         this.ws = new WebSocket(`${protocol}//${host}:${port}`);
         this.ws.binaryType = 'arraybuffer';
 
+        // 包装send以统计上行消息数
+        const _origSend = this.ws.send.bind(this.ws);
+        this.ws.send = (data) => { try { this.msgsUpCount++; } catch(e) {} return _origSend(data); };
+
         this.ws.onopen = () => {
             console.log('连接到服务器');
             // 发送二进制JOIN
@@ -605,29 +587,48 @@ class GameClient {
             enc.writeString(nickname);
             enc.writeUint32(Date.now() >>> 0);
             this.ws.send(enc.getBuffer());
+
+            // 定时发送ping（JSON），用于测量RTT与网络质量
+            if (this.pingTimer) clearInterval(this.pingTimer);
+            this.pingTimer = setInterval(() => {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    const ts = Date.now();
+                    this.ws.send(JSON.stringify({ type: 'ping', timestamp: ts }));
+                }
+            }, 2000);
         };
 
         this.ws.onmessage = (event) => {
+            // 统计下行消息包
+            this.msgsDownCount++;
             if (typeof event.data === 'string') {
                 try {
                     const message = JSON.parse(event.data);
                     if (message && message.type === 'compressed' && message.data) {
-                        // 使用pako解压
+                        // 使用pako解压（服务端使用gzip）
                         try {
                             const binary = atob(message.data);
                             const len = binary.length;
                             const bytes = new Uint8Array(len);
                             for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
-                            const decompressed = window.pako ? window.pako.ungzip(bytes) : bytes;
-                            const jsonText = new TextDecoder().decode(decompressed);
-                            const original = JSON.parse(jsonText);
+                            // 优先使用ungzip，失败时回退inflate
+                            let inflated;
+                            try {
+                                inflated = pako.ungzip(bytes);
+                            } catch (gzErr) {
+                                inflated = pako.inflate(bytes);
+                            }
+                            const text = (inflated instanceof Uint8Array)
+                                ? new TextDecoder().decode(inflated)
+                                : String(inflated);
+                            const original = JSON.parse(text);
                             if (original && original.type === 'batch' && Array.isArray(original.messages)) {
                                 original.messages.forEach(m => this.handleMessage(m));
-                            } else if (original) {
+                            } else {
                                 this.handleMessage(original);
                             }
-                        } catch (err) {
-                            console.error('解压消息失败:', err);
+                        } catch (e) {
+                            console.error('解压失败:', e);
                         }
                     } else if (message && message.type === 'batch' && Array.isArray(message.messages)) {
                         message.messages.forEach(m => this.handleMessage(m));
@@ -647,6 +648,7 @@ class GameClient {
 
         this.ws.onclose = () => {
             console.log('与服务器断开连接');
+            if (this.pingTimer) clearInterval(this.pingTimer);
             alert('与服务器断开连接，请刷新页面重试');
         };
 
@@ -656,138 +658,59 @@ class GameClient {
         };
     }
 
+    sendChatMessage() {
+        try {
+            const input = document.getElementById('chatInput');
+            if (!input) return;
+            const text = (input.value || '').trim();
+            if (!text) return;
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                alert('尚未连接到服务器，无法发送消息');
+                return;
+            }
+            // 使用JSON发送聊天消息，服务器会广播为二进制或JSON
+            this.ws.send(JSON.stringify({ type: 'chatMessage', content: text }));
+            input.value = '';
+        } catch (e) {
+            console.error('发送聊天消息失败:', e);
+        }
+    }
+
+    addChatMessage(playerName, content) {
+        const container = document.getElementById('chatMessages');
+        if (!container) return;
+        const msg = document.createElement('div');
+        msg.className = 'chat-message';
+        const sender = document.createElement('span');
+        sender.className = 'sender';
+        sender.textContent = playerName || '系统';
+        const text = document.createElement('span');
+        text.className = 'content';
+        text.textContent = content || '';
+        msg.appendChild(sender);
+        msg.appendChild(document.createTextNode(': '));
+        msg.appendChild(text);
+        container.appendChild(msg);
+        // 滚动到底部
+        container.scrollTop = container.scrollHeight;
+    }
+
     handleMessage(message) {
         switch (message.type) {
-            case 'joined':
-                this.playerId = message.playerId;
-                this.gameConfig = message.gameConfig;
-                this.hideLogin();
-                this.startGameLoop();
-                break;
-                
-            case 'playerJoined':
-                this.players.set(message.player.id, message.player);
-                break;
-                
-            case 'playerLeft':
-                this.players.delete(message.playerId);
-                break;
-                
-            case 'gameState':
-                this.players.clear();
-                message.players.forEach(player => {
-                    this.players.set(player.id, player);
-                });
-                this.bullets = message.bullets || [];
-                this.powerups = message.powerups || [];
-                this.terrain = message.terrain || [];
-                break;
-                
-            case 'playerMove':
-                const player = this.players.get(message.playerId);
-                if (player) {
-                    player.x = message.x;
-                    player.y = message.y;
-                    player.angle = message.angle;
-                }
-                break;
-                
-            case 'bulletShot':
-                // 不再在客户端本地维护子弹列表，只依赖服务器gameUpdate
-                // this.bullets.push(message.bullet);
-                break;
-                
-            case 'playerHit':
-                this.showHitEffect(message.targetId);
-                // 添加击中特效
-                const targetPlayer = this.players.get(message.targetId);
-                if (targetPlayer) {
-                    this.effects.push(new Effect(targetPlayer.x + 10, targetPlayer.y + 10, 'hit'));
-                }
-                break;
-                
-            case 'bulletHitWall':
-                // 添加子弹击中墙体的爆炸特效
-                this.effects.push(new Effect(message.x, message.y, 'wallHit'));
-                break;
-                
-            case 'playerRespawn':
-                const respawnPlayer = this.players.get(message.playerId);
-                if (respawnPlayer) {
-                    respawnPlayer.x = message.x;
-                    respawnPlayer.y = message.y;
-                    respawnPlayer.health = message.health;
-                    respawnPlayer.isAlive = true;
-                }
-                break;
-                
-            case 'gameUpdate':
-                this.updatePlayersFromServer(message.players);
-                // 更新子弹、道具和地形数据
-                this.bullets = message.bullets || [];
-                this.powerups = message.powerups || [];
-                this.terrain = message.terrain || [];
-                // 更新游戏计时器
-                if (message.remainingTime !== undefined) {
-                    this.updateGameTimer(message.remainingTime);
-                }
-                // 移除killFeed处理，只在单独的killFeed消息中处理
-                // 更新倒计时（无论游戏是否结束都要更新倒计时）
-                if (message.countdown !== undefined) {
-                    this.updateCountdown(message.countdown, message.showingResults);
-                }
-                break;
-            case 'gameEnd':
-                this.showGameEndModal(message.players, message.killFeed);
-                // 立即更新倒计时显示
-                if (message.countdown !== undefined) {
-                    this.updateCountdown(message.countdown, message.showingResults);
-                }
-                break;
-            case 'newGameStart':
-                this.showNewGameModal(message.players, message.terrain, message.countdown);
-                // 立即更新倒计时显示
-                if (message.countdown !== undefined) {
-                    this.updateCountdown(message.countdown, message.showingResults);
-                }
-                break;
-            case 'gameStarted':
-                this.hideNewGameModal();
-                this.hideGameEndModal();
-                this.updatePlayersFromServer(message.players);
-                this.terrain = message.terrain || [];
-                break;
-                
-            case 'incrementalUpdate':
-                // 处理增量更新
-                this.handleIncrementalUpdate(message);
-                break;
-            case 'meleeAttack':
-                this.handleMeleeAttack(message);
-                break;
-                
-            case 'killFeed':
-                this.updateKillFeed(message.killInfo);
-                break;
-                
-            case 'powerupSpawned':
-                this.powerups.push(message.powerup);
-                break;
-                
-            case 'powerupPickedUp':
-                this.powerups = this.powerups.filter(p => p.id !== message.powerupId);
-                console.log(`玩家 ${message.playerId} 拾取了道具: ${message.powerupType}`);
-                
-                // 添加道具拾取特效
-                const pickedUpPlayer = this.players.get(message.playerId);
-                if (pickedUpPlayer) {
-                    this.effects.push(new Effect(pickedUpPlayer.x + 10, pickedUpPlayer.y + 10, 'powerup'));
-                }
-                break;
-                
+            // ...
+
             case 'chatMessage':
                 this.addChatMessage(message.playerName, message.content);
                 break;
+
+            case 'pong': {
+                // 服务器返回pong（JSON），更新RTT与网络质量
+                const now = Date.now();
+                const sentTs = message.timestamp || now;
+                this.pingMs = Math.max(0, now - sentTs);
+                this.networkQuality = message.networkQuality || (this.pingMs <= 60 ? 'excellent' : this.pingMs <= 120 ? 'good' : this.pingMs <= 200 ? 'medium' : 'poor');
+                break;
+            }
         }
     }
 
@@ -795,6 +718,13 @@ class GameClient {
         try {
             const decoder = new BinaryDecoder(buffer);
             const msgType = decoder.readUint8();
+            this._handleBinaryMessageBody(decoder, msgType);
+        } catch (e) {
+            console.error('解析二进制消息失败:', e);
+        }
+    }
+
+    _handleBinaryMessageBody(decoder, msgType) {
             if (msgType === MESSAGE_TYPES.JOINED) {
                 const playerId = decoder.readUint32();
                 const gameConfigJson = decoder.readString();
@@ -808,14 +738,18 @@ class GameClient {
                 this.startGameLoop();
                 return;
             }
-
+            // 完整状态（GAME_STATE） 或 全量更新（GAME_UPDATE）
             if (msgType === MESSAGE_TYPES.GAME_STATE || msgType === MESSAGE_TYPES.GAME_UPDATE) {
-                // 读取玩家
+                const isSnapshot = msgType === MESSAGE_TYPES.GAME_STATE;
+                // 玩家
                 const playerCount = decoder.readUint16();
                 const players = [];
                 for (let i = 0; i < playerCount; i++) {
                     const id = decoder.readUint32();
-                    const nickname = decoder.readString();
+                    let nickname = '';
+                    if (isSnapshot) {
+                        nickname = decoder.readString();
+                    }
                     const x = decoder.readFloat32();
                     const y = decoder.readFloat32();
                     const angle = decoder.readFloat32();
@@ -827,6 +761,12 @@ class GameClient {
                     const rapidActive = decoder.readUint8() === 1;
                     const damageActive = decoder.readUint8() === 1;
 
+                    // 若非快照且未提供昵称，则尝试复用已有昵称
+                    if (!isSnapshot) {
+                        const exist = this.players.get(id);
+                        nickname = exist?.nickname || `Player ${id}`;
+                    }
+
                     players.push({
                         id, nickname, x, y, angle, health, score, isAlive, color,
                         powerups: {
@@ -837,7 +777,7 @@ class GameClient {
                     });
                 }
 
-                // 读取子弹
+                // 子弹
                 const bulletCount = decoder.readUint16();
                 const bullets = [];
                 for (let i = 0; i < bulletCount; i++) {
@@ -851,26 +791,30 @@ class GameClient {
                     bullets.push({ id, x, y, vx, vy, ownerId, damage });
                 }
 
-                // 读取道具
+                // 道具
                 const powerupCount = decoder.readUint16();
                 const powerups = [];
                 for (let i = 0; i < powerupCount; i++) {
                     const id = decoder.readUint32();
-                    const type = decoder.readString();
+                    let type, color, icon;
+                    if (isSnapshot) {
+                        type = decoder.readString();
+                    } else {
+                        const typeId = decoder.readUint8();
+                        type = this.getPowerupTypeById(typeId);
+                    }
                     const x = decoder.readFloat32();
                     const y = decoder.readFloat32();
-                    // 可选颜色/图标（仅GAME_STATE包含）
-                    let color, icon;
-                    if (msgType === MESSAGE_TYPES.GAME_STATE) {
+                    if (isSnapshot) {
                         color = decoder.readString();
                         icon = decoder.readString();
                     }
                     powerups.push({ id, type, x, y, color, icon });
                 }
 
-                // GAME_STATE 还包含地形
+                // 地形（仅快照）
                 let terrain = this.terrain;
-                if (msgType === MESSAGE_TYPES.GAME_STATE) {
+                if (isSnapshot) {
                     const terrainCount = decoder.readUint16();
                     terrain = [];
                     for (let i = 0; i < terrainCount; i++) {
@@ -884,26 +828,340 @@ class GameClient {
                     }
                 }
 
-                // 剩余时间（仅GAME_UPDATE包含，GAME_STATE无该字段）
-                let remainingTime;
-                if (msgType === MESSAGE_TYPES.GAME_UPDATE) {
-                    remainingTime = decoder.readUint32();
+                // 剩余时间（仅GAME_UPDATE）
+                if (!isSnapshot) {
+                    const remainingTime = decoder.readUint32();
+                    this.updateGameTimer(remainingTime);
                 }
 
-                // 应用到客户端状态
-                this.updatePlayersFromServer(players);
-                this.bullets = bullets;
-                this.powerups = powerups;
-                if (msgType === MESSAGE_TYPES.GAME_STATE) {
-                    this.terrain = terrain;
+                // 应用状态
+                if (isSnapshot) {
+                    this.players.clear();
+                    players.forEach(p => this.players.set(p.id, p));
+                    this.updateScoreboard();
+                } else {
+                    this.updatePlayersFromServer(players);
                 }
-                if (typeof remainingTime === 'number') {
-                    this.updateGameTimer(remainingTime);
+                this.bullets = bullets;
+                // 为道具补充颜色/图标以保持一致视觉
+                // 道具统一中性显示（灰色+问号），隐藏具体类型
+                this.powerups = powerups.map(p => ({ ...p, color: '#95a5a6', icon: '?' }));
+                if (isSnapshot) this.terrain = terrain;
+                return;
+            }
+
+            // 增量更新（二进制）
+            if (msgType === MESSAGE_TYPES.INCREMENTAL_UPDATE) {
+                const timestamp = decoder.readUint32();
+                const remainingTime = decoder.readUint32();
+                const isGameEnded = decoder.readUint8() === 1;
+                // section-based TLV until 0xFF
+                while (true) {
+                    const section = decoder.readUint8();
+                    if (section === 0xFF) break;
+                    if (section === 0x10) { // newPlayers
+                        const n = decoder.readUint16();
+                        for (let i = 0; i < n; i++) {
+                            const id = decoder.readUint32();
+                            const nickname = decoder.readString();
+                            const x = decoder.readUint16();
+                            const y = decoder.readUint16();
+                            const angle100 = decoder.readUint16();
+                            const health = decoder.readUint8();
+                            const score = decoder.readUint16();
+                            const isAlive = decoder.readUint8() === 1;
+                            const color = decoder.readString();
+                            this.players.set(id, {
+                                id,
+                                nickname,
+                                x,
+                                y,
+                                angle: angle100 / 100,
+                                health,
+                                score,
+                                isAlive,
+                                color,
+                                powerups: { shield: {active:false}, rapidFire:{active:false}, damageBoost:{active:false} }
+                            });
+                        }
+                    } else if (section === 0x02) { // changedPlayers
+                        const n = decoder.readUint16();
+                        for (let i = 0; i < n; i++) {
+                            const id = decoder.readUint32();
+                            const mask = decoder.readUint8();
+                            const p = this.players.get(id) || { id };
+                            if (mask & 0x01) p.x = decoder.readUint16();
+                            if (mask & 0x02) p.y = decoder.readUint16();
+                            if (mask & 0x04) p.angle = decoder.readUint16() / 100;
+                            if (mask & 0x08) p.health = decoder.readUint8();
+                            if (mask & 0x10) p.score = decoder.readUint16();
+                            if (mask & 0x20) p.isAlive = decoder.readUint8() === 1;
+                            if (mask & 0x40) {
+                                const now = Date.now();
+                                p.powerups = p.powerups || { shield:{}, rapidFire:{}, damageBoost:{} };
+                                // shield
+                                const sActive = decoder.readUint8() === 1;
+                                const sRem = decoder.readUint16();
+                                p.powerups.shield.active = sActive;
+                                p.powerups.shield.endTime = sActive ? now + sRem * 1000 : 0;
+                                // rapid
+                                const rActive = decoder.readUint8() === 1;
+                                const rRem = decoder.readUint16();
+                                p.powerups.rapidFire.active = rActive;
+                                p.powerups.rapidFire.endTime = rActive ? now + rRem * 1000 : 0;
+                                // damage
+                                const dActive = decoder.readUint8() === 1;
+                                const dRem = decoder.readUint16();
+                                p.powerups.damageBoost.active = dActive;
+                                p.powerups.damageBoost.endTime = dActive ? now + dRem * 1000 : 0;
+                            }
+                            this.players.set(id, p);
+                        }
+                    } else if (section === 0x03) { // newBullets
+                        const n = decoder.readUint16();
+                        for (let i = 0; i < n; i++) {
+                            const id = decoder.readString();
+                            const x = decoder.readUint16();
+                            const y = decoder.readUint16();
+                            const vx = decoder.readInt16() / 100;
+                            const vy = decoder.readInt16() / 100;
+                            const ownerId = decoder.readUint32();
+                            if (!this.bullets.find(b => b.id === id)) {
+                                this.bullets.push({ id, x, y, vx, vy, ownerId, damage: 25 });
+                            }
+                        }
+                    } else if (section === 0x13) { // removedBullets
+                        const n = decoder.readUint16();
+                        for (let i = 0; i < n; i++) {
+                            const id = decoder.readString();
+                            this.bullets = this.bullets.filter(b => b.id !== id);
+                        }
+                    } else if (section === 0x04) { // newPowerups
+                        const n = decoder.readUint16();
+                        for (let i = 0; i < n; i++) {
+                            const id = decoder.readUint32();
+                            const typeId = decoder.readUint8();
+                            const x = decoder.readFloat32();
+                            const y = decoder.readFloat32();
+                            const type = this.getPowerupTypeById(typeId);
+                            if (!this.powerups.find(p => p.id === id)) this.powerups.push({ id, type, x, y });
+                        }
+                    } else if (section === 0x14) { // removedPowerups
+                        const n = decoder.readUint16();
+                        for (let i = 0; i < n; i++) {
+                            const id = decoder.readUint32();
+                            this.powerups = this.powerups.filter(p => p.id !== id);
+                        }
+                    }
+                }
+                if (typeof remainingTime === 'number') this.updateGameTimer(remainingTime);
+                this.updateScoreboard();
+                return;
+            }
+
+            // 游戏结束（结果展示）
+            if (msgType === MESSAGE_TYPES.GAME_END) {
+                const countdown = decoder.readUint8();
+                const showingResults = decoder.readUint8() === 1;
+                const n = decoder.readUint16();
+                const players = [];
+                for (let i = 0; i < n; i++) {
+                    const id = decoder.readUint32();
+                    const nickname = decoder.readString();
+                    const score = decoder.readUint16();
+                    const isAlive = decoder.readUint8() === 1;
+                    const health = decoder.readUint8();
+                    players.push({ id, nickname, score, isAlive, health });
+                }
+                this.showGameEndModal(players);
+                this.updateCountdown(countdown, showingResults);
+                return;
+            }
+
+            // 新游戏开始倒计时
+            if (msgType === MESSAGE_TYPES.NEW_GAME_START) {
+                const countdown = decoder.readUint8();
+                this.updateCountdown(countdown, false);
+                return;
+            }
+
+            // 游戏正式开始
+            if (msgType === MESSAGE_TYPES.GAME_STARTED) {
+                this.hideNewGameModal();
+                this.hideGameEndModal();
+                return;
+            }
+
+            // 新玩家加入
+            if (msgType === MESSAGE_TYPES.PLAYER_JOINED) {
+                const id = decoder.readUint32();
+                const nickname = decoder.readString();
+                const x = decoder.readUint16();
+                const y = decoder.readUint16();
+                const angle100 = decoder.readUint16();
+                const health = decoder.readUint8();
+                const score = decoder.readUint16();
+                const isAlive = decoder.readUint8() === 1;
+                const color = decoder.readString();
+                this.players.set(id, {
+                    id,
+                    nickname,
+                    x,
+                    y,
+                    angle: angle100 / 100,
+                    health,
+                    score,
+                    isAlive,
+                    color,
+                    powerups: { shield: {active:false}, rapidFire:{active:false}, damageBoost:{active:false} }
+                });
+                this.updateScoreboard();
+                return;
+            }
+
+            // 玩家离开
+            if (msgType === MESSAGE_TYPES.PLAYER_LEFT) {
+                const id = decoder.readUint32();
+                this.players.delete(id);
+                this.updateScoreboard();
+                return;
+            }
+
+            // 聊天消息
+            if (msgType === MESSAGE_TYPES.CHAT_MESSAGE) {
+                const playerId = decoder.readUint32();
+                const playerName = decoder.readString();
+                const content = decoder.readString();
+                this.addChatMessage(playerName, content);
+                return;
+            }
+
+            // 玩家受击
+            if (msgType === MESSAGE_TYPES.PLAYER_HIT) {
+                const targetId = decoder.readUint32();
+                const shooterId = decoder.readUint32();
+                const damage = decoder.readUint8();
+                const isKill = decoder.readUint8() === 1;
+                this.showHitEffect(targetId);
+                const targetPlayer = this.players.get(targetId);
+                if (targetPlayer) {
+                    this.effects.push(new Effect(targetPlayer.x + 10, targetPlayer.y + 10, 'hit'));
                 }
                 return;
             }
-        } catch (e) {
-            console.error('二进制消息解析失败:', e);
+
+            // 子弹击中墙体
+            if (msgType === MESSAGE_TYPES.BULLET_HIT_WALL) {
+                const x = decoder.readFloat32();
+                const y = decoder.readFloat32();
+                const bulletId = decoder.readString();
+                this.effects.push(new Effect(x, y, 'wallHit'));
+                return;
+            }
+
+            // 玩家复活
+            if (msgType === MESSAGE_TYPES.PLAYER_RESPAWN) {
+                const playerId = decoder.readUint32();
+                const x = decoder.readFloat32();
+                const y = decoder.readFloat32();
+                const health = decoder.readUint8();
+                const p = this.players.get(playerId);
+                if (p) {
+                    p.x = x; p.y = y; p.health = health; p.isAlive = true;
+                }
+                return;
+            }
+
+            // 击杀信息
+            if (msgType === MESSAGE_TYPES.KILL_FEED) {
+                const killer = decoder.readString();
+                const victim = decoder.readString();
+                const weapon = decoder.readString();
+                const timestamp = decoder.readUint32();
+                this.updateKillFeed({ killer, victim, weapon, timestamp });
+                return;
+            }
+
+            // 道具拾取
+            if (msgType === MESSAGE_TYPES.POWERUP_PICKED_UP) {
+                const powerupId = decoder.readUint32();
+                const playerId = decoder.readUint32();
+                const typeId = decoder.readUint8();
+                const type = this.getPowerupTypeById(typeId);
+                this.powerups = this.powerups.filter(p => p.id !== powerupId);
+                const pickedUpPlayer = this.players.get(playerId);
+                if (pickedUpPlayer) {
+                    this.effects.push(new Effect(pickedUpPlayer.x + 10, pickedUpPlayer.y + 10, 'powerup'));
+                    // 本地立即设置buff，保证UI立刻显示
+                    const now = Date.now();
+                    const duration = (this.gameConfig && this.gameConfig.POWERUP_DURATION) || 15000;
+                    pickedUpPlayer.powerups = pickedUpPlayer.powerups || { shield:{}, rapidFire:{}, damageBoost:{} };
+                    if (type === 'shield') {
+                        pickedUpPlayer.powerups.shield.active = true;
+                        pickedUpPlayer.powerups.shield.endTime = now + duration;
+                    } else if (type === 'rapid_fire' || type === 'rapidFire') {
+                        pickedUpPlayer.powerups.rapidFire.active = true;
+                        pickedUpPlayer.powerups.rapidFire.endTime = now + duration;
+                    } else if (type === 'damage_boost' || type === 'damageBoost') {
+                        pickedUpPlayer.powerups.damageBoost.active = true;
+                        pickedUpPlayer.powerups.damageBoost.endTime = now + duration;
+                    }
+                }
+                return;
+            }
+
+            // 道具生成
+            if (msgType === MESSAGE_TYPES.POWERUP_SPAWNED) {
+                const id = decoder.readUint32();
+                const typeId = decoder.readUint8();
+                const x = decoder.readFloat32();
+                const y = decoder.readFloat32();
+                const type = this.getPowerupTypeById(typeId);
+                if (!this.powerups.find(p => p.id === id)) this.powerups.push({ id, type, x, y });
+                return;
+            }
+
+            // 近战攻击
+            if (msgType === MESSAGE_TYPES.MELEE_ATTACK) {
+                const attackerId = decoder.readUint32();
+                const targetId = decoder.readUint32();
+                const targetX = decoder.readFloat32();
+                const targetY = decoder.readFloat32();
+                const damage = decoder.readUint8();
+                const isKill = decoder.readUint8() === 1;
+                const x = decoder.readFloat32();
+                const y = decoder.readFloat32();
+                this.handleMeleeAttack({ attackerId, targetId, targetX, targetY, damage, isKill, x, y });
+                return;
+            }
+    }
+
+    // 将道具类型ID映射为字符串
+    getPowerupTypeById(id) {
+        switch (id) {
+            case 1: return 'shield';
+            case 2: return 'rapid_fire';
+            case 3: return 'damage_boost';
+            case 4: return 'heal';
+            default: return 'unknown';
+        }
+    }
+
+    // 根据道具类型返回颜色与图标，确保视觉一致
+    getPowerupVisual(type) {
+        switch (type) {
+            case 'shield':
+                return { color: '#9b59b6', icon: '🛡️' };
+            case 'rapid_fire':
+            case 'rapidFire':
+                return { color: '#e67e22', icon: '⚡' };
+            case 'damage_boost':
+            case 'damageBoost':
+                return { color: '#e74c3c', icon: '🔥' };
+            case 'heal':
+                return { color: '#2ecc71', icon: '✚' };
+            default:
+                return { color: '#95a5a6', icon: '?' };
         }
     }
 
@@ -1264,6 +1522,46 @@ class GameClient {
         });
     }
 
+    drawPowerup(powerup) {
+        if (!powerup) return;
+        const size = this.gameConfig ? this.gameConfig.POWERUP_SIZE : 15;
+        const x = powerup.x, y = powerup.y;
+        const vis = this.getPowerupVisual(powerup.type || 'unknown');
+        const color = powerup.color || vis.color;
+        const icon = powerup.icon || vis.icon;
+
+        this.backCtx.save();
+        // 发光背景
+        const glow = this.backCtx.createRadialGradient(
+            x + size / 2, y + size / 2, size * 0.2,
+            x + size / 2, y + size / 2, size
+        );
+        glow.addColorStop(0, color + '88');
+        glow.addColorStop(1, color + '00');
+        this.backCtx.fillStyle = glow;
+        this.backCtx.beginPath();
+        this.backCtx.arc(x + size / 2, y + size / 2, size * 0.8, 0, Math.PI * 2);
+        this.backCtx.fill();
+
+        // 核心实体
+        this.backCtx.fillStyle = color;
+        this.backCtx.strokeStyle = '#ffffff55';
+        this.backCtx.lineWidth = 2;
+        this.backCtx.beginPath();
+        this.backCtx.arc(x + size / 2, y + size / 2, size / 2, 0, Math.PI * 2);
+        this.backCtx.fill();
+        this.backCtx.stroke();
+
+        // 图标
+        this.backCtx.fillStyle = '#ffffff';
+        this.backCtx.font = `${Math.round(size * 0.8)}px Arial`;
+        this.backCtx.textAlign = 'center';
+        this.backCtx.textBaseline = 'middle';
+        this.backCtx.fillText(icon, x + size / 2, y + size / 2 + 1);
+
+        this.backCtx.restore();
+    }
+
     startGameLoop() {
         let lastFrameTime = 0;
         const targetFrameTime = 1000 / 60; // 60fps
@@ -1276,6 +1574,23 @@ class GameClient {
                 this.update(timestamp);
                 this.render();
                 lastFrameTime = timestamp;
+
+                // 统计FPS与上下行速率
+                const nowPerf = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+                this.frames++;
+                if (nowPerf - this.lastFpsTime >= 1000) {
+                    const fpsInterval = nowPerf - this.lastFpsTime;
+                    this.fps = Math.round(this.frames * 1000 / fpsInterval);
+                    this.frames = 0;
+                    this.lastFpsTime = nowPerf;
+
+                    const rateIntervalSec = Math.max(0.001, (nowPerf - this.lastRateTime) / 1000);
+                    this.downRate = Math.round(this.msgsDownCount / rateIntervalSec);
+                    this.upRate = Math.round(this.msgsUpCount / rateIntervalSec);
+                    this.msgsDownCount = 0;
+                    this.msgsUpCount = 0;
+                    this.lastRateTime = nowPerf;
+                }
             }
             
             requestAnimationFrame(gameLoop);
@@ -1453,6 +1768,44 @@ class GameClient {
             
             // 更新分数显示
             document.getElementById('score').textContent = player.score;
+        }
+
+        // 更新网络状态与FPS
+        const fpsEl = document.getElementById('fpsDisplay');
+        if (fpsEl) {
+            fpsEl.textContent = `FPS: ${this.fps || '--'}`;
+        }
+        const rateEl = document.getElementById('rateDisplay');
+        if (rateEl) {
+            rateEl.textContent = `⬇︎ ${this.downRate || 0} pkt/s | ⬆︎ ${this.upRate || 0} pkt/s`;
+        }
+        const pingEl = document.getElementById('pingDisplay');
+        const qualityEl = document.getElementById('networkQuality');
+        if (pingEl) {
+            // 设置颜色级别
+            let cls = 'ping-display ';
+            let text = (this.pingMs != null) ? `${this.pingMs}ms` : '--';
+            let level = 'good';
+            if (this.pingMs != null) {
+                if (this.pingMs <= 60) level = 'excellent';
+                else if (this.pingMs <= 120) level = 'good';
+                else if (this.pingMs <= 200) level = 'medium';
+                else level = 'poor';
+            }
+            pingEl.className = cls + level;
+            pingEl.textContent = text;
+        }
+        if (qualityEl) {
+            const q = (this.networkQuality || '').toLowerCase();
+            let text = '良好';
+            let cls = 'network-quality ';
+            if (q === 'excellent') { text = '优秀'; cls += 'quality-excellent'; }
+            else if (q === 'good') { text = '良好'; cls += 'quality-good'; }
+            else if (q === 'medium') { text = '一般'; cls += 'quality-medium'; }
+            else if (q === 'poor') { text = '较差'; cls += 'quality-poor'; }
+            else { cls += 'quality-good'; }
+            qualityEl.className = cls;
+            qualityEl.textContent = text;
         }
     }
 
@@ -1747,93 +2100,8 @@ class GameClient {
         this.backCtx.beginPath();
         this.backCtx.arc(bullet.x, bullet.y, size / 4, 0, Math.PI * 2);
         this.backCtx.fill();
-        
+        // 结束子弹绘制
         this.backCtx.restore();
-    }
-
-    drawPowerup(powerup) {
-        const size = this.gameConfig ? this.gameConfig.POWERUP_SIZE : 15;
-        const centerX = powerup.x + size / 2;
-        const centerY = powerup.y + size / 2;
-        const time = Date.now();
-        
-        // 确保颜色和图标存在，如果不存在则使用默认值
-        const color = powerup.color || '#95a5a6';
-        const icon = powerup.icon || '?';
-        
-        // 旋转动画
-        const rotation = (time * 0.002) % (Math.PI * 2);
-        
-        // 浮动动画
-        const floatOffset = Math.sin(time * 0.003) * 2;
-        const animCenterY = centerY + floatOffset;
-        
-        // 缩放脉冲动画
-        const pulseScale = 1 + Math.sin(time * 0.005) * 0.1;
-        const animSize = size * pulseScale;
-        
-        this.backCtx.save();
-        this.backCtx.translate(centerX, animCenterY);
-        this.backCtx.rotate(rotation);
-        
-        // 绘制外层光环
-        const gradient = this.backCtx.createRadialGradient(0, 0, animSize * 0.3, 0, 0, animSize * 0.8);
-        gradient.addColorStop(0, color + '80');
-        gradient.addColorStop(0.7, color + '40');
-        gradient.addColorStop(1, color + '00');
-        
-        this.backCtx.fillStyle = gradient;
-        this.backCtx.beginPath();
-        this.backCtx.arc(0, 0, animSize * 0.8, 0, Math.PI * 2);
-        this.backCtx.fill();
-        
-        // 绘制道具主体（钻石形状）
-        this.backCtx.fillStyle = color;
-        this.backCtx.shadowColor = color;
-        this.backCtx.shadowBlur = 10;
-        this.backCtx.beginPath();
-        this.backCtx.moveTo(0, -animSize * 0.4);
-        this.backCtx.lineTo(animSize * 0.3, 0);
-        this.backCtx.lineTo(0, animSize * 0.4);
-        this.backCtx.lineTo(-animSize * 0.3, 0);
-        this.backCtx.closePath();
-        this.backCtx.fill();
-        
-        // 绘制内部高光
-        this.backCtx.shadowBlur = 0;
-        this.backCtx.fillStyle = '#ffffff80';
-        this.backCtx.beginPath();
-        this.backCtx.moveTo(0, -animSize * 0.2);
-        this.backCtx.lineTo(animSize * 0.15, -animSize * 0.1);
-        this.backCtx.lineTo(0, 0);
-        this.backCtx.lineTo(-animSize * 0.15, -animSize * 0.1);
-        this.backCtx.closePath();
-        this.backCtx.fill();
-        
-        // 绘制道具图标
-        this.backCtx.fillStyle = '#ffffff';
-        this.backCtx.shadowColor = '#000000';
-        this.backCtx.shadowBlur = 3;
-        this.backCtx.font = `bold ${Math.floor(animSize * 0.6)}px Arial`;
-        this.backCtx.textAlign = 'center';
-        this.backCtx.textBaseline = 'middle';
-        this.backCtx.fillText(icon, 0, 0);
-        
-        this.backCtx.restore();
-        
-        // 绘制星星粒子效果
-        for (let i = 0; i < 3; i++) {
-            const angle = (time * 0.001 + i * Math.PI * 2 / 3) % (Math.PI * 2);
-            const radius = size * 0.8 + Math.sin(time * 0.004 + i) * 5;
-            const starX = centerX + Math.cos(angle) * radius;
-            const starY = animCenterY + Math.sin(angle) * radius;
-            
-            this.backCtx.save();
-            this.backCtx.translate(starX, starY);
-            this.backCtx.fillStyle = '#ffffff' + Math.floor(128 + 127 * Math.sin(time * 0.006 + i)).toString(16).padStart(2, '0');
-            this.drawStar(0, 0, 3, 2, 1);
-            this.backCtx.restore();
-        }
     }
 
     drawPlayerBuffs(player, size) {

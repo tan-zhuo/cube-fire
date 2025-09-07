@@ -161,6 +161,12 @@ class BinaryEncoder {
         return this;
     }
     
+    writeInt16(value) {
+        this.view.setInt16(this.offset, value, true);
+        this.offset += 2;
+        return this;
+    }
+    
     writeUint32(value) {
         this.view.setUint32(this.offset, value, true);
         this.offset += 4;
@@ -195,6 +201,253 @@ function encodeJoined(playerId) {
     // 将gameConfig作为字符串传输，便于扩展
     encoder.writeString(JSON.stringify(GAME_CONFIG));
     return encoder.getBuffer();
+}
+
+// 编码增量更新（二进制）
+function encodeIncrementalUpdate(update) {
+    const enc = new BinaryEncoder().init(8192);
+    enc.writeUint8(MESSAGE_TYPES.INCREMENTAL_UPDATE);
+    // 时间戳与剩余时间
+    const ts = update.timestamp || Date.now();
+    enc.writeUint32(ts);
+    enc.writeUint32(Math.max(0, update.remainingTime || 0));
+    enc.writeUint8(update.isGameEnded ? 1 : 0);
+    
+    // 新玩家
+    if (update.newPlayers && update.newPlayers.length > 0) {
+        enc.writeUint8(0x10);
+        enc.writeUint16(update.newPlayers.length);
+        update.newPlayers.forEach(p => {
+            enc.writeUint32(p.id);
+            enc.writeString(p.nickname || '');
+            enc.writeUint16(Math.max(0, Math.min(65535, Math.round(p.x))));
+            enc.writeUint16(Math.max(0, Math.min(65535, Math.round(p.y))));
+            enc.writeUint16(Math.max(0, Math.min(65535, Math.round((p.angle || 0) * 100))));
+            enc.writeUint8(p.health || 0);
+            enc.writeUint16(Math.min(65535, p.score || 0));
+            enc.writeUint8(p.isAlive ? 1 : 0);
+            enc.writeString(p.color || '#3498db');
+        });
+    }
+    
+    // 变化玩家（使用bitmask按需写字段）
+    if (update.changedPlayers && update.changedPlayers.length > 0) {
+        enc.writeUint8(0x02);
+        enc.writeUint16(update.changedPlayers.length);
+        update.changedPlayers.forEach(c => {
+            enc.writeUint32(c.id);
+            let mask = 0;
+            if (c.x !== undefined) mask |= 0x01;
+            if (c.y !== undefined) mask |= 0x02;
+            if (c.angle !== undefined) mask |= 0x04;
+            if (c.health !== undefined) mask |= 0x08;
+            if (c.score !== undefined) mask |= 0x10;
+            if (c.isAlive !== undefined) mask |= 0x20;
+            if (c.powerups !== undefined) mask |= 0x40; // 新增：道具状态变化
+            enc.writeUint8(mask);
+            if (mask & 0x01) enc.writeUint16(Math.max(0, Math.min(65535, Math.round(c.x))));
+            if (mask & 0x02) enc.writeUint16(Math.max(0, Math.min(65535, Math.round(c.y))));
+            if (mask & 0x04) enc.writeUint16(Math.max(0, Math.min(65535, Math.round(c.angle * 100))));
+            if (mask & 0x08) enc.writeUint8(c.health);
+            if (mask & 0x10) enc.writeUint16(Math.min(65535, c.score));
+            if (mask & 0x20) enc.writeUint8(c.isAlive ? 1 : 0);
+
+            // 写入道具状态（3个buff：shield/rapidFire/damageBoost），每个：active(uint8) + 剩余时间秒(uint16)
+            if (mask & 0x40) {
+                const now = Date.now();
+                const writeBuff = (buff) => {
+                    const active = buff && buff.active;
+                    enc.writeUint8(active ? 1 : 0);
+                    const remSec = active ? Math.max(0, Math.ceil(((buff.endTime || now) - now) / 1000)) : 0;
+                    enc.writeUint16(Math.min(65535, remSec));
+                };
+                writeBuff(c.powerups && c.powerups.shield);
+                writeBuff(c.powerups && (c.powerups.rapidFire || c.powerups.rapid_fire));
+                writeBuff(c.powerups && (c.powerups.damageBoost || c.powerups.damage_boost));
+            }
+        });
+    }
+    
+    // 新子弹
+    if (update.newBullets && update.newBullets.length > 0) {
+        enc.writeUint8(0x03);
+        enc.writeUint16(update.newBullets.length);
+        update.newBullets.forEach(b => {
+            enc.writeString(String(b.id));
+            enc.writeUint16(Math.max(0, Math.min(65535, Math.round(b.x))));
+            enc.writeUint16(Math.max(0, Math.min(65535, Math.round(b.y))));
+            enc.writeInt16(Math.max(-32768, Math.min(32767, Math.round((b.vx || 0) * 100))));
+            enc.writeInt16(Math.max(-32768, Math.min(32767, Math.round((b.vy || 0) * 100))));
+            enc.writeUint32(b.ownerId || 0);
+        });
+    }
+    
+    // 移除子弹
+    if (update.removedBullets && update.removedBullets.length > 0) {
+        enc.writeUint8(0x13);
+        enc.writeUint16(update.removedBullets.length);
+        update.removedBullets.forEach(id => enc.writeString(String(id)));
+    }
+    
+    // 新道具
+    if (update.newPowerups && update.newPowerups.length > 0) {
+        enc.writeUint8(0x04);
+        enc.writeUint16(update.newPowerups.length);
+        update.newPowerups.forEach(p => {
+            enc.writeUint32(p.id);
+            enc.writeUint16(Math.max(0, Math.min(65535, Math.round(p.x))));
+            enc.writeUint16(Math.max(0, Math.min(65535, Math.round(p.y))));
+            enc.writeUint8(getPowerupTypeId(p.type));
+        });
+    }
+    
+    // 移除道具
+    if (update.removedPowerups && update.removedPowerups.length > 0) {
+        enc.writeUint8(0x14);
+        enc.writeUint16(update.removedPowerups.length);
+        update.removedPowerups.forEach(id => enc.writeUint32(id));
+    }
+    
+    // 结束标识
+    enc.writeUint8(0xFF);
+    return enc.getBuffer();
+}
+
+// 编码游戏结束（结果展示）
+function encodeGameEnd(payload) {
+    const enc = new BinaryEncoder().init(8192);
+    enc.writeUint8(MESSAGE_TYPES.GAME_END);
+    enc.writeUint8(payload.countdown || 0);
+    enc.writeUint8(payload.showingResults ? 1 : 0);
+    const players = payload.players || [];
+    enc.writeUint16(players.length);
+    players.forEach(p => {
+        enc.writeUint32(p.id);
+        enc.writeString(p.nickname || '');
+        enc.writeUint16(Math.min(65535, p.score || 0));
+        enc.writeUint8(p.isAlive ? 1 : 0);
+        enc.writeUint8(Math.max(0, Math.min(100, p.health || 0)));
+    });
+    return enc.getBuffer();
+}
+
+// 编码新游戏开始倒计时
+function encodeNewGameStart(payload) {
+    const enc = new BinaryEncoder().init(32);
+    enc.writeUint8(MESSAGE_TYPES.NEW_GAME_START);
+    enc.writeUint8(payload.countdown || 0);
+    return enc.getBuffer();
+}
+
+// 编码游戏正式开始
+function encodeGameStarted() {
+    const enc = new BinaryEncoder().init(8);
+    enc.writeUint8(MESSAGE_TYPES.GAME_STARTED);
+    return enc.getBuffer();
+}
+
+function encodePlayerJoined(player) {
+    const enc = new BinaryEncoder().init(256);
+    enc.writeUint8(MESSAGE_TYPES.PLAYER_JOINED);
+    enc.writeUint32(player.id);
+    enc.writeString(player.nickname || '');
+    enc.writeUint16(Math.max(0, Math.min(65535, Math.round(player.x))));
+    enc.writeUint16(Math.max(0, Math.min(65535, Math.round(player.y))));
+    enc.writeUint16(Math.max(0, Math.min(65535, Math.round((player.angle || 0) * 100))));
+    enc.writeUint8(player.health || 0);
+    enc.writeUint16(Math.min(65535, player.score || 0));
+    enc.writeUint8(player.isAlive ? 1 : 0);
+    enc.writeString(player.color || '#3498db');
+    return enc.getBuffer();
+}
+
+function encodePlayerLeft(playerId) {
+    const enc = new BinaryEncoder().init(16);
+    enc.writeUint8(MESSAGE_TYPES.PLAYER_LEFT);
+    enc.writeUint32(playerId);
+    return enc.getBuffer();
+}
+
+function encodeChatMessage(msg) {
+    const enc = new BinaryEncoder().init(1024);
+    enc.writeUint8(MESSAGE_TYPES.CHAT_MESSAGE);
+    enc.writeUint32(msg.playerId || 0);
+    enc.writeString(msg.playerName || '');
+    enc.writeString(msg.content || '');
+    return enc.getBuffer();
+}
+
+function encodePlayerHit(msg) {
+    const enc = new BinaryEncoder().init(32);
+    enc.writeUint8(MESSAGE_TYPES.PLAYER_HIT);
+    enc.writeUint32(msg.targetId || 0);
+    enc.writeUint32(msg.shooterId || 0);
+    enc.writeUint8(Math.max(0, Math.min(255, msg.damage || 0)));
+    enc.writeUint8(msg.isKill ? 1 : 0);
+    return enc.getBuffer();
+}
+
+function encodeBulletHitWall(msg) {
+    const enc = new BinaryEncoder().init(32);
+    enc.writeUint8(MESSAGE_TYPES.BULLET_HIT_WALL);
+    enc.writeFloat32(msg.x || 0);
+    enc.writeFloat32(msg.y || 0);
+    enc.writeString(String(msg.bulletId || ''));
+    return enc.getBuffer();
+}
+
+function encodePlayerRespawnMsg(msg) {
+    const enc = new BinaryEncoder().init(32);
+    enc.writeUint8(MESSAGE_TYPES.PLAYER_RESPAWN);
+    enc.writeUint32(msg.playerId || 0);
+    enc.writeFloat32(msg.x || 0);
+    enc.writeFloat32(msg.y || 0);
+    enc.writeUint8(Math.max(0, Math.min(100, msg.health || 0)));
+    return enc.getBuffer();
+}
+
+function encodeKillFeedMsg(msg) {
+    const enc = new BinaryEncoder().init(256);
+    enc.writeUint8(MESSAGE_TYPES.KILL_FEED);
+    enc.writeString(msg.killInfo?.killer || '');
+    enc.writeString(msg.killInfo?.victim || '');
+    enc.writeString(msg.killInfo?.weapon || '');
+    enc.writeUint32((msg.killInfo?.timestamp || Date.now()) >>> 0);
+    return enc.getBuffer();
+}
+
+function encodePowerupPickedUpMsg(msg) {
+    const enc = new BinaryEncoder().init(32);
+    enc.writeUint8(MESSAGE_TYPES.POWERUP_PICKED_UP);
+    enc.writeUint32(msg.powerupId || 0);
+    enc.writeUint32(msg.playerId || 0);
+    enc.writeUint8(getPowerupTypeId(msg.powerupType || 'unknown'));
+    return enc.getBuffer();
+}
+
+function encodePowerupSpawnedMsg(msg) {
+    const enc = new BinaryEncoder().init(32);
+    enc.writeUint8(MESSAGE_TYPES.POWERUP_SPAWNED);
+    const p = msg.powerup || {};
+    enc.writeUint32(p.id || 0);
+    enc.writeUint8(getPowerupTypeId(p.type || 'unknown'));
+    enc.writeFloat32(p.x || 0);
+    enc.writeFloat32(p.y || 0);
+    return enc.getBuffer();
+}
+
+function encodeMeleeAttack(msg) {
+    const enc = new BinaryEncoder().init(64);
+    enc.writeUint8(MESSAGE_TYPES.MELEE_ATTACK);
+    enc.writeUint32(msg.attackerId || 0);
+    enc.writeUint32(msg.targetId || 0);
+    enc.writeFloat32(msg.targetX || 0);
+    enc.writeFloat32(msg.targetY || 0);
+    enc.writeUint8(Math.max(0, Math.min(255, msg.damage || 0)));
+    enc.writeUint8(msg.isKill ? 1 : 0);
+    enc.writeFloat32(msg.x || 0); // 攻击者当前位置x
+    enc.writeFloat32(msg.y || 0); // 攻击者当前位置y
+    return enc.getBuffer();
 }
 
 // 二进制解码器
@@ -250,25 +503,27 @@ function encodeGameStateUpdate(gameState) {
     // 写入每个玩家数据
     players.forEach(player => {
         encoder.writeUint32(player.id);
-        encoder.writeString(player.nickname);
         encoder.writeFloat32(player.x);
         encoder.writeFloat32(player.y);
         encoder.writeFloat32(player.angle);
         encoder.writeUint8(player.health);
-        encoder.writeUint16(Math.min(65535, Math.max(0, Math.floor(player.score || 0))));
+        encoder.writeUint16(Math.min(65535, player.score));
         encoder.writeUint8(player.isAlive ? 1 : 0);
-        encoder.writeString(player.color);
         
-        // 道具状态
-        encoder.writeUint8(player.powerups.shield.active ? 1 : 0);
-        encoder.writeUint8(player.powerups.rapidFire.active ? 1 : 0);
-        encoder.writeUint8(player.powerups.damageBoost.active ? 1 : 0);
+        // 写入颜色（静态）
+        encoder.writeString(player.color || '#3498db');
+        
+        // 写入道具状态（简单序列化）
+        encoder.writeUint8(player.powerups && player.powerups.shield && player.powerups.shield.active ? 1 : 0);
+        encoder.writeUint8(player.powerups && player.powerups.rapidFire && player.powerups.rapidFire.active ? 1 : 0);
+        encoder.writeUint8(player.powerups && player.powerups.damageBoost && player.powerups.damageBoost.active ? 1 : 0);
     });
     
     // 写入子弹数量和数据
     encoder.writeUint16(gameState.bullets.length);
     gameState.bullets.forEach(bullet => {
-        encoder.writeString(bullet.id);
+        // 统一使用字符串ID，便于与客户端兼容
+        encoder.writeString(String(bullet.id));
         encoder.writeFloat32(bullet.x);
         encoder.writeFloat32(bullet.y);
         encoder.writeFloat32(bullet.vx);
@@ -281,7 +536,12 @@ function encodeGameStateUpdate(gameState) {
     encoder.writeUint16(gameState.powerups.length);
     gameState.powerups.forEach(powerup => {
         encoder.writeUint32(powerup.id);
-        encoder.writeString(powerup.type);
+        // 使用类型ID代替字符串以减小体积
+        try {
+            encoder.writeUint8(getPowerupTypeId(powerup.type));
+        } catch (e) {
+            encoder.writeUint8(0);
+        }
         encoder.writeFloat32(powerup.x);
         encoder.writeFloat32(powerup.y);
     });
@@ -834,8 +1094,25 @@ const messageIdCounter = { value: 0 };
 
 // 检查是否应该使用二进制格式
 function shouldUseBinary(messageType) {
-    // 仅对高频率的大数据量消息使用二进制格式
-    return messageType === 'gameUpdate';
+    // 改为对核心高频与重要事件全部使用二进制
+    return (
+        messageType === 'gameState' ||
+        messageType === 'gameUpdate' ||
+        messageType === 'incrementalUpdate' ||
+        messageType === 'gameEnd' ||
+        messageType === 'newGameStart' ||
+        messageType === 'gameStarted' ||
+        messageType === 'playerJoined' ||
+        messageType === 'playerLeft' ||
+        messageType === 'chatMessage' ||
+        messageType === 'playerHit' ||
+        messageType === 'bulletHitWall' ||
+        messageType === 'playerRespawn' ||
+        messageType === 'killFeed' ||
+        messageType === 'powerupPickedUp' ||
+        messageType === 'powerupSpawned' ||
+        messageType === 'meleeAttack'
+    );
 }
 
 // 智能编码消息（二进制或JSON）
@@ -843,8 +1120,38 @@ function encodeMessage(message) {
     if (shouldUseBinary(message.type)) {
         // 使用二进制编码
         switch (message.type) {
+            case 'gameState':
+                return encodeInitialGameState(gameState);
             case 'gameUpdate':
                 return encodeGameStateUpdate(gameState);
+            case 'incrementalUpdate':
+                return encodeIncrementalUpdate(message);
+            case 'gameEnd':
+                return encodeGameEnd(message);
+            case 'newGameStart':
+                return encodeNewGameStart(message);
+            case 'gameStarted':
+                return encodeGameStarted();
+            case 'playerJoined':
+                return encodePlayerJoined(message.player);
+            case 'playerLeft':
+                return encodePlayerLeft(message.playerId);
+            case 'chatMessage':
+                return encodeChatMessage(message);
+            case 'playerHit':
+                return encodePlayerHit(message);
+            case 'bulletHitWall':
+                return encodeBulletHitWall(message);
+            case 'playerRespawn':
+                return encodePlayerRespawnMsg(message);
+            case 'killFeed':
+                return encodeKillFeedMsg(message);
+            case 'powerupPickedUp':
+                return encodePowerupPickedUpMsg(message);
+            case 'powerupSpawned':
+                return encodePowerupSpawnedMsg(message);
+            case 'meleeAttack':
+                return encodeMeleeAttack(message);
             default:
                 // 暂时回退到JSON
                 return JSON.stringify(message);
@@ -860,7 +1167,7 @@ function broadcast(message, excludeId = null, priority = 1) {
     // 对于二进制消息，直接编码和发送
     if (shouldUseBinary(message.type)) {
         const binaryData = encodeMessage(message);
-        sendToClients(binaryData, excludeId, priority);
+        sendToClients(binaryData, excludeId, priority, message.type);
         return;
     }
     
@@ -871,7 +1178,7 @@ function broadcast(message, excludeId = null, priority = 1) {
     if (priority >= 3 || message.type === 'playerHit' || message.type === 'meleeAttack') {
         // 高优先级消息立即发送
         const serializedData = compressMessage(optimizedMessage);
-        sendToClients(serializedData, excludeId, priority);
+        sendToClients(serializedData, excludeId, priority, message.type);
     } else {
         // 低优先级消息加入批处理队列
         addToBatchQueue(optimizedMessage, excludeId, priority);
@@ -967,12 +1274,17 @@ function getPowerupTypeId(type) {
 // 简化的消息系统
 
 // 发送消息到客户端 - 优化版本支持自适应发送
-function sendToClients(data, excludeId, priority = 1) {
+function sendToClients(data, excludeId, priority = 1, messageType = null) {
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN && client.playerId !== excludeId) {
             const clientPing = gameState.clientPing.get(client.playerId) || 50;
             const networkQuality = gameState.clientNetworkQuality.get(client.playerId) || 'good';
             
+            // 首次进入必须先收到一次GAME_STATE快照，否则跳过增量/全量更新
+            if ((messageType === 'gameUpdate' || messageType === 'incrementalUpdate') && !client.hasInitialSnapshot) {
+                return;
+            }
+
             // 根据网络质量自适应发送
             if (networkQuality === 'poor' && priority < 2) {
                 // 弱网环境下跳过低优先级消息
@@ -981,6 +1293,10 @@ function sendToClients(data, excludeId, priority = 1) {
             
             try {
                 client.send(data);
+                // 如果是GAME_STATE，标记该客户端已经拿到初始快照
+                if (messageType === 'gameState') {
+                    client.hasInitialSnapshot = true;
+                }
             } catch (error) {
                 console.error(`发送消息失败给客户端 ${client.playerId}:`, error);
             }
@@ -1468,6 +1784,7 @@ wss.on('connection', (ws) => {
     ws.isAlive = true;
     ws.lastPingTime = Date.now();
     ws.messageCount = 0;
+    ws.hasInitialSnapshot = false; // 首次进入尚未收到GAME_STATE
     // ws.lastMessageTime 不在这里初始化，让第一条消息通过
     
     // 为新连接的客户端注册pong监听器
@@ -1771,6 +2088,8 @@ function handleJoin(ws, message) {
     // 发送当前游戏完整状态（二进制）
     try {
         ws.send(encodeInitialGameState(gameState));
+        // 标记该玩家已收到初始快照，允许后续增量/全量更新
+        ws.hasInitialSnapshot = true;
     } catch (e) {
         console.error('发送初始游戏状态失败:', e);
     }
@@ -2331,6 +2650,9 @@ function updateGameCountdown() {
                     players: getPlayersWithBuffs(),
                     terrain: gameState.terrain
                 });
+
+                // 紧接着广播一次完整快照，确保所有客户端与新地形、初始状态同步
+                broadcast({ type: 'gameState' }, null, 3);
                 return;
             }
         }
@@ -2408,11 +2730,16 @@ function updateGameLogic() {
 
 // 网络状态推送函数（独立于游戏逻辑）
 function broadcastGameState() {
-    // 统一使用二进制的完整游戏状态更新，确保客户端高效同步
-    const updateMessage = { type: 'gameUpdate' };
-    broadcast(updateMessage, null, 3);
+    // 结果展示阶段不推送位置状态，减少无意义数据
+    if (gameState.showingResults) return;
     
-    // 更新计数器
+    // 生成更新（增量或完整）
+    const update = generateIncrementalUpdate();
+    if (update && update.type === 'incrementalUpdate') {
+        broadcast(update, null, 3);
+    } else {
+        broadcast({ type: 'gameUpdate' }, null, 3);
+    }
     gameState.updateCounter++;
 }
 
@@ -2467,13 +2794,16 @@ setInterval(() => {
 
 // 启动分离的游戏循环
 function startGameSystems() {
-    // 游戏逻辑循环 - 30FPS稳定
+    // 游戏逻辑循环 - 固定30FPS
     setInterval(updateGameLogic, gameLogicInterval);
     
-    // 网络推送循环 - 60FPS流畅
-    setInterval(broadcastGameState, networkUpdateInterval);
+    // 自适应网络推送循环 - 使用setTimeout以便动态调整
+    (function networkLoop() {
+        broadcastGameState();
+        setTimeout(networkLoop, networkUpdateInterval);
+    })();
     
-    // 性能监控和自适应调整
+    // 性能监控和自适应调整（会动态更新networkUpdateInterval）
     adaptiveGameLoop();
 }
 
