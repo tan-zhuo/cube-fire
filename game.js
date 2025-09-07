@@ -940,8 +940,14 @@ class GameClient {
                             cur.lastServerUpdate = nowTs;
                             // 仅本地玩家立即做一次纠偏；其他玩家留给按帧平滑处理
                             if (id === this.playerId) {
-                                if (nx !== undefined && cur.x !== undefined) cur.x = cur.x + (nx - cur.x) * fSelf; else if (nx !== undefined) cur.x = nx;
-                                if (ny !== undefined && cur.y !== undefined) cur.y = cur.y + (ny - cur.y) * fSelf; else if (ny !== undefined) cur.y = ny;
+                                const lockWindow = 160;
+                                const locked = (axis) => cur[`blockMove${axis}`] && (Date.now() - (cur.blockMoveAt || 0) < lockWindow);
+                                if (nx !== undefined) {
+                                    if (locked('X')) cur.x = nx; else if (cur.x !== undefined) cur.x = cur.x + (nx - cur.x) * fSelf; else cur.x = nx;
+                                }
+                                if (ny !== undefined) {
+                                    if (locked('Y')) cur.y = ny; else if (cur.y !== undefined) cur.y = cur.y + (ny - cur.y) * fSelf; else cur.y = ny;
+                                }
                                 if (nAngle !== undefined) cur.angle = nAngle;
                             } else {
                                 if (nAngle !== undefined) cur.angle = nAngle;
@@ -1221,13 +1227,15 @@ class GameClient {
             if (localPlayer) {
                 const nowTs = Date.now();
                 if (serverPlayer.id === this.playerId) {
-                    // 本地玩家：做一次较大的纠偏
+                    // 本地玩家：做一次较大的纠偏；若当前轴被阻挡，则直接对齐该轴，避免“推进-回弹”抖动
                     const factorSelf = 0.35;
+                    const lockWindow = 160; // ms 内视为仍在推墙
+                    const locked = (axis) => localPlayer[`blockMove${axis}`] && (Date.now() - (localPlayer.blockMoveAt || 0) < lockWindow);
                     if (typeof serverPlayer.x === 'number') {
-                        localPlayer.x = localPlayer.x + (serverPlayer.x - localPlayer.x) * factorSelf;
+                        localPlayer.x = locked('X') ? serverPlayer.x : (localPlayer.x + (serverPlayer.x - localPlayer.x) * factorSelf);
                     }
                     if (typeof serverPlayer.y === 'number') {
-                        localPlayer.y = localPlayer.y + (serverPlayer.y - localPlayer.y) * factorSelf;
+                        localPlayer.y = locked('Y') ? serverPlayer.y : (localPlayer.y + (serverPlayer.y - localPlayer.y) * factorSelf);
                     }
                 } else {
                     // 他人：只更新目标与服务器速度估计，具体位置交给按帧平滑
@@ -1816,6 +1824,13 @@ class GameClient {
         if (this.keys['s'] || this.keys['arrowdown']) dy += speed;
         if (this.keys['a'] || this.keys['arrowleft']) dx -= speed;
         if (this.keys['d'] || this.keys['arrowright']) dx += speed;
+
+        // 对角归一：保持对角速度与单轴一致，减少贴墙时的穿插抖动
+        if (dx !== 0 && dy !== 0) {
+            const inv = 1 / Math.sqrt(2);
+            dx *= inv;
+            dy *= inv;
+        }
         
         // 计算角度（无论是否移动都要更新）
         const playerSize = this.gameConfig.PLAYER_SIZE || 20;
@@ -1827,33 +1842,83 @@ class GameClient {
         
         // 检查是否需要发送数据到服务器（频率限制）
         if (currentTime - this.lastMoveUpdate >= this.moveUpdateInterval) {
+            // 先计算本地可行走的新位置（带本地碰撞预判 + 轴向分离）
+            const oldX = player.x;
+            const oldY = player.y;
+            const margin = (this.gameConfig && this.gameConfig.TERRAIN_SIZE) ? this.gameConfig.TERRAIN_SIZE : 40;
+            const clampX = (x) => Math.max(margin, Math.min(this.canvas.width - margin - playerSize, x));
+            const clampY = (y) => Math.max(margin, Math.min(this.canvas.height - margin - playerSize, y));
+
+            // 目标位移
+            let wantX = clampX(player.x + dx);
+            let wantY = clampY(player.y + dy);
+
+            // 轴向分离碰撞检测（与服务器一致），避免本地穿入导致反复回弹
+            let finalX = oldX;
+            let finalY = oldY;
+            if (dx !== 0) {
+                const tryX = clampX(oldX + dx);
+                if (!this.checkTerrainCollisionClient(tryX, oldY, playerSize, playerSize)) {
+                    finalX = tryX;
+                }
+            }
+            if (dy !== 0) {
+                const tryY = clampY(oldY + dy);
+                if (!this.checkTerrainCollisionClient(finalX, tryY, playerSize, playerSize)) {
+                    finalY = tryY;
+                }
+            }
+
+            // 标记被墙体阻挡的轴，用于后续收到服务器位置时按轴对齐（避免抖动）
+            const blockedX = (dx !== 0) && Math.abs(finalX - oldX) < 1e-6;
+            const blockedY = (dy !== 0) && Math.abs(finalY - oldY) < 1e-6;
+            player.blockMoveX = blockedX;
+            player.blockMoveY = blockedY;
+            player.blockMoveAt = currentTime;
+            if (!blockedX && dx === 0) player.blockMoveX = false;
+            if (!blockedY && dy === 0) player.blockMoveY = false;
+
             // 检查是否有实际变化
-            const hasPositionChange = (dx !== 0 || dy !== 0);
+            const hasPositionChange = (Math.abs(finalX - oldX) > 0.001 || Math.abs(finalY - oldY) > 0.001);
             const hasAngleChange = Math.abs(angle - (player.lastServerAngle || 0)) > 0.02; // 更小的角度变化阈值
             
             if (hasPositionChange || hasAngleChange) {
-                // 计算新位置但不立即应用
-                const margin = (this.gameConfig && this.gameConfig.TERRAIN_SIZE) ? this.gameConfig.TERRAIN_SIZE : 40;
-                const newX = Math.max(margin, Math.min(this.canvas.width - margin - playerSize, player.x + dx));
-                const newY = Math.max(margin, Math.min(this.canvas.height - margin - playerSize, player.y + dy));
-                
                 // 发送二进制MOVE
                 const enc = new BinaryEncoder().init(32);
                 enc.writeUint8(MESSAGE_TYPES.MOVE);
-                enc.writeFloat32(newX);
-                enc.writeFloat32(newY);
+                enc.writeFloat32(hasPositionChange ? finalX : oldX);
+                enc.writeFloat32(hasPositionChange ? finalY : oldY);
                 enc.writeFloat32(angle);
                 this.ws.send(enc.getBuffer());
                 
                 // 本地乐观应用（预测）
-                player.x = newX;
-                player.y = newY;
+                if (hasPositionChange) {
+                    player.x = finalX;
+                    player.y = finalY;
+                }
                 
                 // 记录发送时间和角度
                 this.lastMoveUpdate = currentTime;
                 player.lastServerAngle = angle;
             }
         }
+    }
+
+    // 本地AABB碰撞检测（客户端侧，使用服务端下发的terrain）
+    checkTerrainCollisionClient(x, y, w, h) {
+        if (!this.terrain || this.terrain.length === 0) return false;
+        for (let i = 0; i < this.terrain.length; i++) {
+            const t = this.terrain[i];
+            // 与服务端一致：所有地形块均视为碰撞体
+            if (this._aabbIntersect(x, y, w, h, t.x, t.y, t.width, t.height)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    _aabbIntersect(ax, ay, aw, ah, bx, by, bw, bh) {
+        return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
     }
 
     shoot() {
