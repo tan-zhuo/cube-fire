@@ -1803,13 +1803,7 @@ wss.on('connection', (ws) => {
     ws.on('message', (data) => {
         // console.log('收到原始数据:', data.toString().substring(0, 100)); // 减少日志输出
         try {
-            // 限制消息频率防止DoS攻击 - 放宽限制
-            const now = Date.now();
-            if (ws.lastMessageTime && now - ws.lastMessageTime < 16) { // 最小16ms间隔 (60FPS)
-                // console.log('消息频率过快，忽略'); // 减少日志输出
-                return;
-            }
-            ws.lastMessageTime = now;
+            // 统计计数（用于监控）
             ws.messageCount++;
             
             // 限制消息大小
@@ -1854,6 +1848,27 @@ wss.on('connection', (ws) => {
             }
             
             // console.log('收到消息:', message.type, message); // 减少日志输出
+
+            // 按类型限速（在解码之后执行）：
+            // - move: 16ms（~60FPS）
+            // - chatMessage: 200ms
+            // - ping: 500ms
+            // - shoot / melee / respawn / 其他: 不限速（由游戏内部CD控制）
+            {
+                const now = Date.now();
+                const type = message && message.type;
+                ws.lastMessageTimes = ws.lastMessageTimes || {};
+                let minInterval = 0;
+                if (type === 'move') minInterval = 16;
+                else if (type === 'chatMessage') minInterval = 200;
+                else if (type === 'ping') minInterval = 500;
+                const lastTs = ws.lastMessageTimes[type] || 0;
+                if (minInterval > 0 && now - lastTs < minInterval) {
+                    return; // 丢弃被限速的非关键消息
+                }
+                ws.lastMessageTimes[type] = now;
+            }
+
             handleMessage(ws, message);
         } catch (error) {
             console.error('解析消息错误:', error);

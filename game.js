@@ -744,6 +744,8 @@ class GameClient {
                 // 玩家
                 const playerCount = decoder.readUint16();
                 const players = [];
+                const nowForBuffs = Date.now();
+                const defaultBuffMs = (this.gameConfig && this.gameConfig.POWERUP_DURATION) ? this.gameConfig.POWERUP_DURATION : 15000;
                 for (let i = 0; i < playerCount; i++) {
                     const id = decoder.readUint32();
                     let nickname = '';
@@ -770,9 +772,9 @@ class GameClient {
                     players.push({
                         id, nickname, x, y, angle, health, score, isAlive, color,
                         powerups: {
-                            shield: { active: shieldActive, endTime: 0 },
-                            rapidFire: { active: rapidActive, endTime: 0 },
-                            damageBoost: { active: damageActive, endTime: 0 }
+                            shield: { active: shieldActive, endTime: shieldActive ? nowForBuffs + defaultBuffMs : 0 },
+                            rapidFire: { active: rapidActive, endTime: rapidActive ? nowForBuffs + defaultBuffMs : 0 },
+                            damageBoost: { active: damageActive, endTime: damageActive ? nowForBuffs + defaultBuffMs : 0 }
                         }
                     });
                 }
@@ -1177,7 +1179,32 @@ class GameClient {
                 localPlayer.score = serverPlayer.score;
                 localPlayer.health = serverPlayer.health;
                 localPlayer.isAlive = serverPlayer.isAlive;
-                localPlayer.powerups = serverPlayer.powerups || {};
+                // 合并buff状态，避免全量更新时重置计时
+                const now = Date.now();
+                const defaultBuffMs = (this.gameConfig && this.gameConfig.POWERUP_DURATION) ? this.gameConfig.POWERUP_DURATION : 15000;
+                localPlayer.powerups = localPlayer.powerups || { shield:{}, rapidFire:{}, damageBoost:{} };
+                const mergeBuff = (key) => {
+                    const s = (serverPlayer.powerups && serverPlayer.powerups[key]) || {};
+                    const l = localPlayer.powerups[key] || {};
+                    if (s.active) {
+                        // 若本地已有并未过期，则保留本地endTime；否则使用服务器endTime或默认值
+                        if (l.active && l.endTime && l.endTime > now) {
+                            // keep local endTime
+                        } else if (s.endTime && s.endTime > now) {
+                            l.endTime = s.endTime;
+                        } else {
+                            l.endTime = now + defaultBuffMs;
+                        }
+                        l.active = true;
+                    } else {
+                        l.active = false;
+                        l.endTime = 0;
+                    }
+                    localPlayer.powerups[key] = l;
+                };
+                mergeBuff('shield');
+                mergeBuff('rapidFire');
+                mergeBuff('damageBoost');
             }
         });
         this.updateScoreboard();
@@ -2009,48 +2036,26 @@ class GameClient {
         const time = Date.now();
         const centerX = player.x + size / 2;
         const centerY = player.y + size + 10; // 在角色下方
-        let markerCount = 0;
-        
-        // 护盾标记
-        if (player.powerups.shield && player.powerups.shield.active) {
+        const actives = [];
+        if (player.powerups.shield && player.powerups.shield.active) actives.push({ ch: 'S', color: '#9b59b6' });
+        if (player.powerups.rapidFire && player.powerups.rapidFire.active) actives.push({ ch: 'R', color: '#e67e22' });
+        if (player.powerups.damageBoost && player.powerups.damageBoost.active) actives.push({ ch: 'D', color: '#e74c3c' });
+        const markerCount = actives.length;
+        if (markerCount === 0) return;
+        // 先画背景，避免盖住文字
+        this.backCtx.save();
+        this.backCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        this.backCtx.fillRect(centerX - markerCount * 6 - 2, centerY - 8, markerCount * 12 + 4, 12);
+        this.backCtx.restore();
+        // 再画字母标记
+        actives.forEach((item, idx) => {
             this.backCtx.save();
-            this.backCtx.fillStyle = '#9b59b6';
+            this.backCtx.fillStyle = item.color;
             this.backCtx.font = 'bold 10px Arial';
             this.backCtx.textAlign = 'center';
-            this.backCtx.fillText('S', centerX + markerCount * 12 - 6, centerY);
+            this.backCtx.fillText(item.ch, centerX + idx * 12 - 6, centerY);
             this.backCtx.restore();
-            markerCount++;
-        }
-        
-        // 快速射击标记
-        if (player.powerups.rapidFire && player.powerups.rapidFire.active) {
-            this.backCtx.save();
-            this.backCtx.fillStyle = '#e67e22';
-            this.backCtx.font = 'bold 10px Arial';
-            this.backCtx.textAlign = 'center';
-            this.backCtx.fillText('R', centerX + markerCount * 12 - 6, centerY);
-            this.backCtx.restore();
-            markerCount++;
-        }
-        
-        // 伤害提升标记
-        if (player.powerups.damageBoost && player.powerups.damageBoost.active) {
-            this.backCtx.save();
-            this.backCtx.fillStyle = '#e74c3c';
-            this.backCtx.font = 'bold 10px Arial';
-            this.backCtx.textAlign = 'center';
-            this.backCtx.fillText('D', centerX + markerCount * 12 - 6, centerY);
-            this.backCtx.restore();
-            markerCount++;
-        }
-        
-        // 如果有buff，绘制背景框
-        if (markerCount > 0) {
-            this.backCtx.save();
-            this.backCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-            this.backCtx.fillRect(centerX - markerCount * 6 - 2, centerY - 8, markerCount * 12 + 4, 12);
-            this.backCtx.restore();
-        }
+        });
     }
 
     drawBullet(bullet) {
@@ -2164,7 +2169,7 @@ class GameClient {
                 );
                 gradient.addColorStop(0, '#ff4444');
                 gradient.addColorStop(0.5, '#ff8800');
-                gradient.addColorStop(1, '#ffff0000');
+                gradient.addColorStop(1, 'rgba(255, 255, 0, 0)');
                 
                 this.backCtx.fillStyle = gradient;
                 this.backCtx.globalAlpha = 0.7 + 0.3 * Math.sin(time * 0.006 + flame);
@@ -2309,7 +2314,8 @@ class GameClient {
             this.backCtx.fillText(timeText, boxX + boxWidth - 5, itemY);
             
             // 绘制进度条
-            const progress = Math.max(0, powerup.remainingTime / 15); // 15秒总时间
+            const totalDurationSec = (this.gameConfig && this.gameConfig.POWERUP_DURATION ? this.gameConfig.POWERUP_DURATION / 1000 : 15);
+            const progress = Math.max(0, Math.min(1, powerup.remainingTime / totalDurationSec)); // 按配置总时间
             const barWidth = boxWidth - 10;
             const barHeight = 3;
             const barX = boxX + 5;
@@ -2389,11 +2395,12 @@ class GameClient {
         ];
         
         let displayIndex = 0;
+        const totalDurationSec = (this.gameConfig && this.gameConfig.POWERUP_DURATION ? this.gameConfig.POWERUP_DURATION / 1000 : 15);
         
         buffTypes.forEach(buff => {
             if (player.powerups[buff.key] && player.powerups[buff.key].active) {
                 const remainingTime = (player.powerups[buff.key].endTime - time) / 1000;
-                const progress = remainingTime / 15; // 15秒总时间
+                const progress = Math.max(0, Math.min(1, remainingTime / totalDurationSec));
                 
                 if (remainingTime > 0) {
                     const timerY = baseY - displayIndex * 8;
