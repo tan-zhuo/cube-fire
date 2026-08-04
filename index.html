@@ -1464,7 +1464,7 @@
             display: flex;
             flex-direction: column;
             gap: 6px;
-            flex: 1 1 150px;
+            flex: 1 1 130px;
         }
         .host-option select {
             appearance: none;
@@ -1556,6 +1556,134 @@
 
         .fallback-toggle:hover {
             color: var(--text-mid);
+        }
+
+        /* ===== 房间列表 ===== */
+        .room-list {
+            max-height: 176px;
+            overflow-y: auto;
+            margin-top: 4px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: rgba(7, 11, 20, 0.5);
+            scrollbar-width: thin;
+            scrollbar-color: rgba(148, 163, 184, 0.3) transparent;
+        }
+
+        .room-list-empty {
+            padding: 14px;
+            font-size: 12.5px;
+            color: var(--text-low);
+            text-align: center;
+        }
+
+        .room-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            padding: 9px 12px;
+            text-align: left;
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-hi);
+            cursor: pointer;
+            font-family: var(--font);
+            transition: background 0.15s;
+        }
+
+        .room-item:last-child {
+            border-bottom: none;
+        }
+
+        .room-item:hover {
+            background: rgba(56, 189, 248, 0.10);
+        }
+
+        .room-host {
+            font-size: 13.5px;
+            font-weight: 700;
+            max-width: 100px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .room-meta {
+            flex: 1;
+            font-size: 12px;
+            color: var(--text-mid);
+            text-align: right;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .room-go {
+            flex-shrink: 0;
+            font-size: 12.5px;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .room-list-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+            min-height: 26px;
+        }
+
+        .recent-rooms {
+            flex: 1;
+            min-width: 0;
+            text-align: left;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+
+        .recent-label {
+            font-size: 12px;
+            color: var(--text-low);
+            margin-right: 6px;
+        }
+
+        .recent-chip {
+            display: inline-flex;
+            align-items: center;
+            font-family: var(--mono);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            color: var(--accent);
+            background: rgba(56, 189, 248, 0.08);
+            border: 1px solid rgba(56, 189, 248, 0.30);
+            border-radius: 999px;
+            padding: 3px 10px;
+            margin-right: 6px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .recent-chip:hover {
+            background: rgba(56, 189, 248, 0.18);
+        }
+
+        .room-refresh {
+            flex-shrink: 0;
+            background: none;
+            border: none;
+            color: var(--text-mid);
+            font-size: 12px;
+            font-family: var(--font);
+            cursor: pointer;
+            padding: 4px;
+        }
+
+        .room-refresh:hover {
+            color: var(--accent);
         }
 
         /* ===== 分队计分板 ===== */
@@ -1774,6 +1902,13 @@
                                 <option value="team">红蓝对抗</option>
                             </select>
                         </div>
+                        <div class="host-option">
+                            <label class="field-label" for="roomVisibilitySelect">房间列表</label>
+                            <select id="roomVisibilitySelect">
+                                <option value="public">公开 · 列表可见</option>
+                                <option value="private">私密 · 仅凭码</option>
+                            </select>
+                        </div>
                         <p class="host-option-hint">创建房间时生效；对局中可用 /map、/team 指令调整下一局</p>
                     </div>
 
@@ -1806,7 +1941,12 @@
                     </div>
 
                     <div id="guestPanel" class="hidden">
-                        <div class="panel-step"><span class="step-badge">1</span><span>输入房主告诉你的 <b>6 位房间码</b>，直接加入</span></div>
+                        <div class="panel-step"><span class="step-badge">1</span><span>从<b>房间列表</b>选一个加入，或输入 <b>6 位房间码</b></span></div>
+                        <div id="roomList" class="room-list"><div class="room-list-empty">正在获取房间列表...</div></div>
+                        <div class="room-list-bar">
+                            <span id="recentRooms" class="recent-rooms"></span>
+                            <button id="refreshRoomsButton" class="room-refresh">刷新列表</button>
+                        </div>
                         <div class="room-code-row">
                             <input id="roomCodeInput" maxlength="6" placeholder="房间码" autocomplete="off" spellcheck="false">
                             <button id="joinByCodeButton" class="btn">加入</button>

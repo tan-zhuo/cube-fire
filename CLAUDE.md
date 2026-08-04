@@ -19,7 +19,7 @@ CUBEFIRE·立方火线：多人局域网2.5D俯视角射击游戏，支持两种
 ### 核心文件
 - `server.js` - WebSocket服务器，处理游戏逻辑、玩家连接和实时通信（服务器模式）
 - `host-core.js` - 浏览器端游戏主机，从`server.js`移植的权威游戏逻辑（无服务器模式，两份`GAME_CONFIG`需保持一致）
-- `lan.js` - 房间码信令（PeerJS）、WebRTC手动信令（邀请码/应答码）、传输层封装（本地回环/DataChannel）和大厅UI逻辑
+- `lan.js` - 房间码信令（PeerJS）、选举制房间列表（玩家页面竞争认领`cubefire-v1-lobby`固定ID兼任目录节点，房主心跳注册、访客轮询拉取、目录死亡自动补位）、WebRTC手动信令（邀请码/应答码）、传输层封装（本地回环/DataChannel）和大厅UI逻辑
 - `game.js` - 客户端游戏逻辑，包含粒子系统、特效、渲染和输入处理；通过`window.createGameTransport`工厂选择传输方式，未设置时回退WebSocket
 - `index.html` - 游戏主页面，包含完整的用户界面、样式和联机大厅
 
