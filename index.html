@@ -1487,6 +1487,77 @@
             color: #9aa8bd;
         }
 
+        /* ===== 房间码 ===== */
+        .room-code-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 4px;
+        }
+
+        #roomCodeInput {
+            flex: 1;
+            min-width: 0;
+            padding: 10px 14px;
+            font-size: 20px;
+            font-weight: 800;
+            font-family: var(--mono);
+            letter-spacing: 6px;
+            text-transform: uppercase;
+            text-align: center;
+            color: var(--text-hi);
+            background: rgba(7, 11, 20, 0.7);
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius-sm);
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        #roomCodeInput::placeholder {
+            letter-spacing: 2px;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-low);
+        }
+
+        #roomCodeInput:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.18);
+        }
+
+        .room-code-row .btn {
+            width: auto;
+            margin-top: 0;
+            padding: 10px 24px;
+        }
+
+        #roomCodeDisplay {
+            font-size: 30px;
+            font-weight: 900;
+            font-family: var(--mono);
+            letter-spacing: 8px;
+            color: var(--accent);
+            text-shadow: 0 0 18px rgba(56, 189, 248, 0.45);
+            margin: 6px 0 2px;
+            user-select: all;
+        }
+
+        .fallback-toggle {
+            display: block;
+            width: 100%;
+            background: none;
+            border: none;
+            color: var(--text-low);
+            font-size: 12px;
+            cursor: pointer;
+            margin-top: 12px;
+            padding: 4px;
+            text-decoration: underline dotted;
+        }
+
+        .fallback-toggle:hover {
+            color: var(--text-mid);
+        }
+
         /* ===== 分队计分板 ===== */
         #matchInfo {
             font-size: 12px;
@@ -1531,6 +1602,7 @@
         .team-result-vs { color: #9aa8bd; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
 </head>
 <body>
     <div id="gameContainer">
@@ -1555,17 +1627,24 @@
                 </div>
             </div>
             <div class="panel-divider"></div>
-            <p class="panel-tip">邀请真人玩家：每位新玩家需要一份新的邀请码（一次邀请一人）</p>
-            <button id="genInviteButton" class="btn">生成邀请码</button>
-            <div id="inviteExchange" class="hidden">
-                <div class="panel-step"><span class="step-badge">1</span><span>把<b>邀请码</b>发给对方</span></div>
-                <textarea id="inviteCodeOutput" readonly rows="3"></textarea>
-                <button id="copyInviteButton" class="btn ghost">复制邀请码</button>
-                <div class="panel-step"><span class="step-badge">2</span><span>把对方回传的<b>应答码</b>粘贴到下面</span></div>
-                <textarea id="answerCodeInput" placeholder="粘贴应答码..." rows="3"></textarea>
-                <button id="confirmAnswerButton" class="btn">确认连接</button>
+            <p class="panel-tip">邀请真人玩家：把房间码告诉朋友，输码直接加入</p>
+            <div id="roomCodeDisplay">——</div>
+            <button id="copyRoomCodeButton" class="btn ghost">复制房间码</button>
+            <p id="roomServiceStatus" class="panel-tip"></p>
+            <button id="manualInviteToggle" class="fallback-toggle">纯离线局域网？使用手动邀请码连接</button>
+            <div id="manualInviteArea" class="hidden">
+                <p class="panel-tip">每位新玩家需要一份新的邀请码（一次邀请一人）</p>
+                <button id="genInviteButton" class="btn">生成邀请码</button>
+                <div id="inviteExchange" class="hidden">
+                    <div class="panel-step"><span class="step-badge">1</span><span>把<b>邀请码</b>发给对方</span></div>
+                    <textarea id="inviteCodeOutput" readonly rows="3"></textarea>
+                    <button id="copyInviteButton" class="btn ghost">复制邀请码</button>
+                    <div class="panel-step"><span class="step-badge">2</span><span>把对方回传的<b>应答码</b>粘贴到下面</span></div>
+                    <textarea id="answerCodeInput" placeholder="粘贴应答码..." rows="3"></textarea>
+                    <button id="confirmAnswerButton" class="btn">确认连接</button>
+                </div>
+                <p id="inviteStatus" class="panel-status"></p>
             </div>
-            <p id="inviteStatus" class="panel-status"></p>
             <p id="inviteCount" class="panel-tip"></p>
             <button id="closeInviteButton" class="btn ghost">关闭</button>
         </div>
@@ -1711,7 +1790,7 @@
                             <span class="mode-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9aa8bd" stroke-width="1.8" stroke-linecap="round"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg></span>
                             <span class="mode-info">
                                 <span class="mode-title">加入房间</span>
-                                <span class="mode-desc">粘贴房主的邀请码，直连进入对局</span>
+                                <span class="mode-desc">输入房主的 6 位房间码，直连进入对局</span>
                             </span>
                             <span class="mode-arrow">→</span>
                         </button>
@@ -1727,15 +1806,23 @@
                     </div>
 
                     <div id="guestPanel" class="hidden">
-                        <div class="panel-step"><span class="step-badge">1</span><span>把房主发给你的<b>邀请码</b>粘贴到下面</span></div>
-                        <textarea id="inviteCodeInput" placeholder="粘贴邀请码..." rows="3"></textarea>
-                        <button id="genAnswerButton" class="btn">生成应答码</button>
-                        <div id="guestAnswerArea" class="hidden">
-                            <div class="panel-step"><span class="step-badge">2</span><span>把下面的<b>应答码</b>发回给房主，等待确认</span></div>
-                            <textarea id="answerCodeOutput" readonly rows="3"></textarea>
-                            <button id="copyAnswerButton" class="btn ghost">复制应答码</button>
+                        <div class="panel-step"><span class="step-badge">1</span><span>输入房主告诉你的 <b>6 位房间码</b>，直接加入</span></div>
+                        <div class="room-code-row">
+                            <input id="roomCodeInput" maxlength="6" placeholder="房间码" autocomplete="off" spellcheck="false">
+                            <button id="joinByCodeButton" class="btn">加入</button>
                         </div>
                         <p id="guestStatus" class="panel-status"></p>
+                        <button id="manualJoinToggle" class="fallback-toggle">纯离线局域网？使用手动邀请码连接</button>
+                        <div id="manualJoinArea" class="hidden">
+                            <div class="panel-step"><span class="step-badge">1</span><span>把房主发给你的<b>邀请码</b>粘贴到下面</span></div>
+                            <textarea id="inviteCodeInput" placeholder="粘贴邀请码..." rows="3"></textarea>
+                            <button id="genAnswerButton" class="btn">生成应答码</button>
+                            <div id="guestAnswerArea" class="hidden">
+                                <div class="panel-step"><span class="step-badge">2</span><span>把下面的<b>应答码</b>发回给房主，等待确认</span></div>
+                                <textarea id="answerCodeOutput" readonly rows="3"></textarea>
+                                <button id="copyAnswerButton" class="btn ghost">复制应答码</button>
+                            </div>
+                        </div>
                         <button id="guestBackButton" class="btn ghost">← 返回模式选择</button>
                     </div>
                 </div>

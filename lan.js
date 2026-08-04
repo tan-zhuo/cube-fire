@@ -1,6 +1,9 @@
 // lan.js — 无服务器局域网联机层
-// 通过 WebRTC DataChannel 直连浏览器：房主页面运行 GameHost（权威游戏逻辑），
-// 其他玩家用"邀请码/应答码"手动信令建立 P2P 连接，无需任何服务器。
+// 通过 WebRTC DataChannel 直连浏览器：房主页面运行 GameHost（权威游戏逻辑）。
+// 建连方式有两种：
+//   1. 房间码（默认）：借助 PeerJS 公共信令云自动交换 SDP，访客输入 6 位房间码
+//      直接加入；信令只在握手瞬间使用，游戏数据始终 P2P 直连（局域网内不出网）
+//   2. 邀请码/应答码（离线后备）：手动复制粘贴信令，完全无需互联网
 (function () {
 'use strict';
 
@@ -129,6 +132,140 @@ function attachChannelToHost(dc) {
     dc.onclose = () => conn.close();
 }
 
+// ---------- 房间码信令（PeerJS 公共信令云） ----------
+// 房间码只用于握手时定位房主，游戏数据不经过信令服务器
+const ROOM_PREFIX = 'cubefire-v1-';
+const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // 去除 0/O/1/I/L 等易混淆字符
+
+function randomRoomCode(len = 6) {
+    const arr = new Uint32Array(len);
+    crypto.getRandomValues(arr);
+    let s = '';
+    for (let i = 0; i < len; i++) s += CODE_CHARS[arr[i] % CODE_CHARS.length];
+    return s;
+}
+
+let hostPeer = null;   // 房主的 PeerJS 实例
+let guestPeer = null;  // 访客的 PeerJS 实例
+
+// 房主：注册房间码，等待访客直连
+function hostStartRoomService() {
+    const codeEl = $('roomCodeDisplay');
+    const statusEl = $('roomServiceStatus');
+    if (!window.Peer) {
+        codeEl.textContent = '不可用';
+        statusEl.textContent = '房间码服务加载失败（可能无网络），请使用下方手动邀请码';
+        return;
+    }
+    let attempts = 0;
+    const tryStart = () => {
+        const code = randomRoomCode();
+        const peer = new Peer(ROOM_PREFIX + code, { debug: 0 });
+        peer.on('open', () => {
+            hostPeer = peer;
+            codeEl.textContent = code;
+            statusEl.textContent = '把房间码告诉朋友即可加入；游戏数据 P2P 直连';
+        });
+        peer.on('connection', conn => {
+            conn.on('open', () => {
+                try { if (conn.dataChannel) conn.dataChannel.binaryType = 'arraybuffer'; } catch (e) {}
+                const gconn = window.GameHost.addConnection(data => {
+                    if (conn.open) conn.send(data);
+                });
+                conn.on('data', d => gconn.deliver(d));
+                conn.on('close', () => { gconn.close(); updateInviteCount(); });
+                statusEl.textContent = '新玩家已通过房间码加入';
+                updateInviteCount();
+            });
+        });
+        peer.on('disconnected', () => {
+            // 与信令云断开只影响新玩家加入，已建立的对局不受影响；尝试重连
+            try { peer.reconnect(); } catch (e) {}
+        });
+        peer.on('error', err => {
+            if (err.type === 'unavailable-id' && attempts++ < 3) {
+                try { peer.destroy(); } catch (e) {}
+                tryStart(); // 房间码撞车，换一个重试
+            } else if (!hostPeer) {
+                codeEl.textContent = '不可用';
+                statusEl.textContent = '无法连接房间码服务（纯离线局域网？），请使用下方手动邀请码';
+            }
+        });
+    };
+    tryStart();
+}
+
+// 访客：把 PeerJS DataConnection 包装成 WebSocket 风格接口
+function createPeerConnTransport(conn) {
+    const t = makeTransportShell();
+    try { if (conn.dataChannel) conn.dataChannel.binaryType = 'arraybuffer'; } catch (e) {}
+    conn.on('data', d => { if (t.onmessage) t.onmessage({ data: d }); });
+    conn.on('close', () => {
+        t.readyState = 3;
+        if (t.onclose) t.onclose();
+    });
+    conn.on('error', err => { if (t.onerror) t.onerror(err); });
+    t.send = data => { if (conn.open) conn.send(data); };
+    setTimeout(() => { if (t.onopen) t.onopen(); }, 0);
+    return t;
+}
+
+// 访客：凭房间码直接加入
+function guestJoinByCode() {
+    const statusEl = $('guestStatus');
+    if (!requireNickname()) return;
+    const code = $('roomCodeInput').value.trim().toUpperCase().replace(/\s/g, '');
+    if (code.length !== 6) {
+        showError(statusEl, '请输入 6 位房间码');
+        return;
+    }
+    if (!window.Peer) {
+        showError(statusEl, '房间码服务加载失败（可能无网络），请使用下方手动邀请码');
+        return;
+    }
+    const btn = $('joinByCodeButton');
+    btn.disabled = true;
+    statusEl.style.color = '';
+    statusEl.textContent = '正在连接房间...';
+    let settled = false;
+    const fail = msg => {
+        if (settled) return;
+        settled = true;
+        btn.disabled = false;
+        showError(statusEl, msg);
+        try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
+        guestPeer = null;
+    };
+    const timer = setTimeout(() => fail('连接超时，请核对房间码后重试'), 15000);
+
+    try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
+    const peer = new Peer({ debug: 0 });
+    guestPeer = peer;
+    peer.on('open', () => {
+        // raw 序列化：数据原样走 DataChannel，与游戏二进制/JSON 协议完全一致
+        const conn = peer.connect(ROOM_PREFIX + code, { reliable: true, serialization: 'raw' });
+        conn.on('open', () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            statusEl.textContent = '连接成功，正在进入游戏...';
+            window.createGameTransport = () => createPeerConnTransport(conn);
+            window.game.joinGame();
+        });
+        conn.on('error', () => fail('连接房间失败，请重试'));
+    });
+    peer.on('error', err => {
+        clearTimeout(timer);
+        if (err.type === 'peer-unavailable') {
+            fail('找不到该房间，请核对房间码（区分是否已过期）');
+        } else if (err.type === 'network' || err.type === 'server-error') {
+            fail('无法连接房间码服务（纯离线局域网？），请使用下方手动邀请码');
+        } else {
+            fail('连接失败: ' + (err.type || err.message || '未知错误'));
+        }
+    });
+}
+
 // ---------- 大厅 UI ----------
 const $ = id => document.getElementById(id);
 
@@ -175,8 +312,9 @@ function startAsHost() {
     });
     window.createGameTransport = createLoopbackTransport;
     window.game.joinGame();
-    // 显示游戏内"邀请玩家"按钮
+    // 显示游戏内"邀请玩家"按钮，并注册房间码
     $('inviteToggle').classList.remove('hidden');
+    hostStartRoomService();
 }
 
 async function hostGenerateInvite() {
@@ -434,7 +572,18 @@ document.addEventListener('DOMContentLoaded', () => {
         $('modeButtons').classList.remove('hidden');
     });
 
-    // 访客
+    // 访客：房间码直接加入
+    $('joinByCodeButton').addEventListener('click', guestJoinByCode);
+    $('roomCodeInput').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') guestJoinByCode();
+    });
+    $('roomCodeInput').addEventListener('input', (e) => {
+        e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    });
+    $('manualJoinToggle').addEventListener('click', () =>
+        $('manualJoinArea').classList.toggle('hidden'));
+
+    // 访客：手动邀请码（离线后备）
     $('genAnswerButton').addEventListener('click', guestGenerateAnswer);
     $('copyAnswerButton').addEventListener('click', () =>
         copyText($('answerCodeOutput').value, $('copyAnswerButton')));
@@ -453,6 +602,10 @@ document.addEventListener('DOMContentLoaded', () => {
         window.GameHost.removeBot();
         refreshBotCount();
     });
+    $('copyRoomCodeButton').addEventListener('click', () =>
+        copyText($('roomCodeDisplay').textContent.trim(), $('copyRoomCodeButton')));
+    $('manualInviteToggle').addEventListener('click', () =>
+        $('manualInviteArea').classList.toggle('hidden'));
     $('genInviteButton').addEventListener('click', hostGenerateInvite);
     $('copyInviteButton').addEventListener('click', () =>
         copyText($('inviteCodeOutput').value, $('copyInviteButton')));

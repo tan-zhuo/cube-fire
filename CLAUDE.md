@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 项目概述
 
 CUBEFIRE·立方火线：多人局域网2.5D俯视角射击游戏，支持两种联机模式：
-- **无服务器模式（默认）**：直接打开`index.html`，房主浏览器运行权威游戏逻辑（`host-core.js`），其他玩家通过WebRTC DataChannel直连（手动交换邀请码/应答码作为信令，无需任何服务器）
+- **无服务器模式（默认）**：直接打开`index.html`，房主浏览器运行权威游戏逻辑（`host-core.js`），其他玩家通过WebRTC DataChannel直连。信令两种：6位房间码（PeerJS公共信令云自动握手，默认）或手动交换邀请码/应答码（纯离线后备，无需任何网络服务）
 - **服务器模式（原版）**：Node.js WebSocket服务器（`server.js`）
 
 ## 开发命令
@@ -19,7 +19,7 @@ CUBEFIRE·立方火线：多人局域网2.5D俯视角射击游戏，支持两种
 ### 核心文件
 - `server.js` - WebSocket服务器，处理游戏逻辑、玩家连接和实时通信（服务器模式）
 - `host-core.js` - 浏览器端游戏主机，从`server.js`移植的权威游戏逻辑（无服务器模式，两份`GAME_CONFIG`需保持一致）
-- `lan.js` - WebRTC手动信令（邀请码/应答码）、传输层封装（本地回环/DataChannel）和大厅UI逻辑
+- `lan.js` - 房间码信令（PeerJS）、WebRTC手动信令（邀请码/应答码）、传输层封装（本地回环/DataChannel）和大厅UI逻辑
 - `game.js` - 客户端游戏逻辑，包含粒子系统、特效、渲染和输入处理；通过`window.createGameTransport`工厂选择传输方式，未设置时回退WebSocket
 - `index.html` - 游戏主页面，包含完整的用户界面、样式和联机大厅
 
