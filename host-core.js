@@ -235,6 +235,13 @@ function encodeJoined(playerId) {
     return encoder.getBuffer();
 }
 
+// 角度编码：atan2 范围是 -π~π，uint16 无符号，先归一化到 0~2π 再 ×100
+function encodeAngle100(angle) {
+    const TWO_PI = Math.PI * 2;
+    const a = ((angle || 0) % TWO_PI + TWO_PI) % TWO_PI;
+    return Math.round(a * 100);
+}
+
 // 编码增量更新（二进制）
 function encodeIncrementalUpdate(update) {
     const enc = new BinaryEncoder().init(8192);
@@ -254,7 +261,7 @@ function encodeIncrementalUpdate(update) {
             enc.writeString(p.nickname || '');
             enc.writeUint16(Math.max(0, Math.min(65535, Math.round(p.x))));
             enc.writeUint16(Math.max(0, Math.min(65535, Math.round(p.y))));
-            enc.writeUint16(Math.max(0, Math.min(65535, Math.round((p.angle || 0) * 100))));
+            enc.writeUint16(encodeAngle100(p.angle));
             enc.writeUint8(p.health || 0);
             enc.writeUint16(Math.min(65535, p.score || 0));
             enc.writeUint8(p.isAlive ? 1 : 0);
@@ -280,7 +287,7 @@ function encodeIncrementalUpdate(update) {
             enc.writeUint8(mask);
             if (mask & 0x01) enc.writeUint16(Math.max(0, Math.min(65535, Math.round(c.x))));
             if (mask & 0x02) enc.writeUint16(Math.max(0, Math.min(65535, Math.round(c.y))));
-            if (mask & 0x04) enc.writeUint16(Math.max(0, Math.min(65535, Math.round(c.angle * 100))));
+            if (mask & 0x04) enc.writeUint16(encodeAngle100(c.angle));
             if (mask & 0x08) enc.writeUint8(c.health);
             if (mask & 0x10) enc.writeUint16(Math.min(65535, c.score));
             if (mask & 0x20) enc.writeUint8(c.isAlive ? 1 : 0);
@@ -387,7 +394,7 @@ function encodePlayerJoined(player) {
     enc.writeString(player.nickname || '');
     enc.writeUint16(Math.max(0, Math.min(65535, Math.round(player.x))));
     enc.writeUint16(Math.max(0, Math.min(65535, Math.round(player.y))));
-    enc.writeUint16(Math.max(0, Math.min(65535, Math.round((player.angle || 0) * 100))));
+    enc.writeUint16(encodeAngle100(player.angle));
     enc.writeUint8(player.health || 0);
     enc.writeUint16(Math.min(65535, player.score || 0));
     enc.writeUint8(player.isAlive ? 1 : 0);
