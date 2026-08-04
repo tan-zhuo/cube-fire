@@ -1,48 +1,17 @@
-const WebSocket = require('ws');
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-const compression = require('compression');
-const zlib = require('zlib');
-// 静默服务器日志以提升性能（如需调试，可改为 false）
-const SILENCE_LOGS = true;
-if (SILENCE_LOGS) {
-    console.log = () => {};
-    console.info = () => {};
-    console.debug = () => {};
-}
-// 创建HTTP服务器
-const server = http.createServer((req, res) => {
-    // 使用压缩中间件
-    compression()(req, res, () => {
-        let filePath = req.url === '/' ? 'index.html' : req.url.substring(1);
-        const fullPath = path.join(__dirname, filePath);
-    
-    // 设置MIME类型
-    const ext = path.extname(fullPath);
-    const mimeTypes = {
-        '.html': 'text/html',
-        '.js': 'text/javascript',
-        '.css': 'text/css'
-    };
-    
-    const contentType = mimeTypes[ext] || 'text/plain';
-    
-    fs.readFile(fullPath, (err, data) => {
-        if (err) {
-            res.writeHead(404);
-            res.end('File not found');
-            return;
-        }
-        
-        res.writeHead(200, { 'Content-Type': contentType });
-        res.end(data);
-    });
-    });
-});
+// host-core.js — 浏览器端"游戏主机"核心，从 server.js 移植而来
+// 由房主页面运行权威游戏逻辑；玩家连接通过 GameHost.addConnection 接入
+// （本地玩家走内存回环，远程玩家走 WebRTC DataChannel）
+window.GameHost = (function () {
+'use strict';
 
-// 创建WebSocket服务器
-const wss = new WebSocket.Server({ server });
+// 静默主机日志以提升性能（如需调试，可改为 false）
+const SILENCE_LOGS = true;
+const console = SILENCE_LOGS
+    ? { log() {}, info() {}, debug() {}, warn: window.console.warn.bind(window.console), error: window.console.error.bind(window.console) }
+    : window.console;
+
+// 所有已接入的玩家连接（替代原 wss.clients）
+const connections = new Set();
 
 // 游戏状态
 const gameState = {
@@ -1094,7 +1063,7 @@ class Powerup {
             case POWERUP_TYPES.DAMAGE_BOOST:
                 return '●'; // 圆点，代表力量
             case POWERUP_TYPES.HEAL:
-                return '❤'; // 心形，代表回血
+                return '+'; // 十字，代表回血
             default:
                 return '?';
         }
@@ -1404,81 +1373,6 @@ function broadcast(message, excludeId = null, priority = 1) {
     }
 }
 
-// 消息序列化 - 暂时使用JSON确保兼容性
-function serializeMessage(message) {
-    // 暂时禁用二进制序列化，使用JSON确保兼容性
-    return JSON.stringify(message);
-}
-
-// 增量更新的二进制序列化
-function serializeIncrementalUpdate(update) {
-    const parts = [];
-    
-    // 消息类型标识 (1字节)
-    parts.push(0x01); // 增量更新标识
-    
-    // 时间戳 (4字节)
-    const timestamp = update.timestamp || Date.now();
-    parts.push(
-        (timestamp >> 24) & 0xFF,
-        (timestamp >> 16) & 0xFF,
-        (timestamp >> 8) & 0xFF,
-        timestamp & 0xFF
-    );
-    
-    // 玩家更新
-    if (update.changedPlayers && update.changedPlayers.length > 0) {
-        parts.push(0x02); // 玩家更新标识
-        parts.push(update.changedPlayers.length); // 玩家数量
-        
-        update.changedPlayers.forEach(player => {
-            parts.push(player.id); // 玩家ID
-            parts.push(
-                Math.round(player.x / 2), // 位置精度降低到2像素
-                Math.round(player.y / 2),
-                Math.round(player.angle * 50) // 角度精度降低
-            );
-            parts.push(player.health, player.score, player.isAlive ? 1 : 0);
-        });
-    }
-    
-    // 子弹更新
-    if (update.newBullets && update.newBullets.length > 0) {
-        parts.push(0x03); // 新子弹标识
-        parts.push(update.newBullets.length);
-        
-        update.newBullets.forEach(bullet => {
-            parts.push(
-                Math.round(bullet.x / 2),
-                Math.round(bullet.y / 2),
-                Math.round(bullet.vx * 10), // 速度精度降低
-                Math.round(bullet.vy * 10),
-                bullet.ownerId
-            );
-        });
-    }
-    
-    // 道具更新
-    if (update.newPowerups && update.newPowerups.length > 0) {
-        parts.push(0x04); // 新道具标识
-        parts.push(update.newPowerups.length);
-        
-        update.newPowerups.forEach(powerup => {
-            parts.push(
-                powerup.id,
-                Math.round(powerup.x / 2),
-                Math.round(powerup.y / 2),
-                getPowerupTypeId(powerup.type)
-            );
-        });
-    }
-    
-    // 结束标识
-    parts.push(0xFF);
-    
-    return Buffer.from(parts);
-}
-
 // 获取道具类型ID
 function getPowerupTypeId(type) {
     const typeMap = {
@@ -1494,8 +1388,8 @@ function getPowerupTypeId(type) {
 
 // 发送消息到客户端 - 优化版本支持自适应发送
 function sendToClients(data, excludeId, priority = 1, messageType = null) {
-    wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN && client.playerId !== excludeId) {
+    connections.forEach(client => {
+        if (client.isOpen && client.playerId !== excludeId) {
             const clientPing = gameState.clientPing.get(client.playerId) || 50;
             const networkQuality = gameState.clientNetworkQuality.get(client.playerId) || 'good';
             
@@ -1525,8 +1419,8 @@ function sendToClients(data, excludeId, priority = 1, messageType = null) {
 
 // 添加到批处理队列
 function addToBatchQueue(message, excludeId, priority) {
-    wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN && client.playerId !== excludeId) {
+    connections.forEach(client => {
+        if (client.isOpen && client.playerId !== excludeId) {
             const playerId = client.playerId;
             if (!gameState.messageQueue.has(playerId)) {
                 gameState.messageQueue.set(playerId, []);
@@ -1563,8 +1457,8 @@ function processBatchQueue() {
     gameState.messageQueue.forEach((queue, playerId) => {
         if (queue.length === 0) return;
         
-        const client = Array.from(wss.clients).find(c => c.playerId === playerId);
-        if (!client || client.readyState !== WebSocket.OPEN) {
+        const client = Array.from(connections).find(c => c.playerId === playerId);
+        if (!client || !client.isOpen) {
             gameState.messageQueue.delete(playerId);
             return;
         }
@@ -1613,32 +1507,9 @@ function processBatchQueue() {
     gameState.lastBatchTime = now;
 }
 
-// 消息压缩函数
+// 消息序列化（局域网直连无需压缩，直接JSON）
 function compressMessage(message) {
-    const jsonString = JSON.stringify(message);
-    
-    // 小消息不压缩
-    if (jsonString.length < 200) {
-        return jsonString;
-    }
-    
-    try {
-        const compressed = zlib.gzipSync(jsonString);
-        
-        // 如果压缩后反而更大，则不压缩
-        if (compressed.length >= jsonString.length * 0.9) {
-            return jsonString;
-        }
-        
-        return JSON.stringify({
-            type: 'compressed',
-            data: compressed.toString('base64'),
-            originalLength: jsonString.length
-        });
-    } catch (error) {
-        console.error('消息压缩失败:', error);
-        return jsonString;
-    }
+    return JSON.stringify(message);
 }
 
 
@@ -1995,168 +1866,115 @@ function getPlayersWithBuffs() {
     }));
 }
 
-// 处理客户端连接 - 优化连接管理
-wss.on('connection', (ws) => {
+// 接入一个玩家连接（本地回环或 WebRTC DataChannel）
+// sendFn(data): 主机把要发给该玩家的数据（string 或 ArrayBuffer）交给传输层
+// 返回的连接对象提供 deliver(data) 接收该玩家发来的数据，close() 处理断开
+function addConnection(sendFn) {
     console.log('新客户端连接');
-    
-    // 设置连接参数
-    ws.isAlive = true;
-    ws.lastPingTime = Date.now();
-    ws.messageCount = 0;
-    ws.hasInitialSnapshot = false; // 首次进入尚未收到GAME_STATE
-    // ws.lastMessageTime 不在这里初始化，让第一条消息通过
-    
-    // 为新连接的客户端注册pong监听器
-    ws.on('pong', () => {
-        ws.isAlive = true;
-    });
-    
-    // 设置连接超时 - 延长到30秒
-    ws.connectionTimeout = setTimeout(() => {
-        if (!ws.playerId) {
-            console.log('客户端连接超时，断开连接');
-            ws.terminate();
+    const ws = {
+        isOpen: true,
+        playerId: null,
+        hasInitialSnapshot: false, // 首次进入尚未收到GAME_STATE
+        lastPingTime: Date.now(),
+        messageCount: 0,
+        lastMessageTimes: {},
+        send(data) {
+            if (!ws.isOpen) return;
+            sendFn(data);
+        },
+        deliver(data) {
+            if (ws.isOpen) handleClientData(ws, data);
+        },
+        close() {
+            handleClientClose(ws);
         }
-    }, 30000); // 30秒内必须完成登录
-    
-    ws.on('message', (data) => {
-        // console.log('收到原始数据:', data.toString().substring(0, 100)); // 减少日志输出
-        try {
-            // 统计计数（用于监控）
-            ws.messageCount++;
-            
-            // 限制消息大小
-            if (data.length > 1024 * 10) { // 最大10KB
-                console.log('消息过大，忽略');
-                return;
-            }
-            
-            let message;
-            
-            // 检查数据格式：二进制或JSON
-            if (data instanceof Buffer || data instanceof ArrayBuffer) {
-                // 首先尝试判断是否为JSON字符串
-                try {
-                    const textData = data instanceof Buffer ? data.toString('utf8') : new TextDecoder().decode(data);
-                    // 如果能成功解析为JSON，说明是JSON格式
-                    if (textData.startsWith('{') || textData.startsWith('[')) {
-                        message = JSON.parse(textData);
-                    } else {
-                        // 二进制格式
-                        const arrayBuffer = data instanceof Buffer
-                            ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
-                            : data;
-                        message = decodeMessage(arrayBuffer);
-                        if (!message) {
-                            throw new Error('二进制解码失败');
-                        }
-                    }
-                } catch (parseError) {
-                    // 如果JSON解析失败，尝试二进制解码
-                    const arrayBuffer = data instanceof Buffer
-                        ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
-                        : data;
-                    message = decodeMessage(arrayBuffer);
-                    if (!message) {
-                        throw new Error('二进制解码失败');
-                    }
-                }
-            } else {
-                // JSON格式（向后兼容）
-                message = JSON.parse(data);
-            }
-            
-            // console.log('收到消息:', message.type, message); // 减少日志输出
+    };
+    connections.add(ws);
 
-            // 按类型限速（在解码之后执行）：
-            // - move: 16ms（~60FPS）
-            // - chatMessage: 200ms
-            // - ping: 500ms
-            // - shoot / melee / respawn / 其他: 不限速（由游戏内部CD控制）
-            {
-                const now = Date.now();
-                const type = message && message.type;
-                ws.lastMessageTimes = ws.lastMessageTimes || {};
-                let minInterval = 0;
-                if (type === 'move') minInterval = 16;
-                else if (type === 'chatMessage') minInterval = 200;
-                else if (type === 'ping') minInterval = 500;
-                const lastTs = ws.lastMessageTimes[type] || 0;
-                if (minInterval > 0 && now - lastTs < minInterval) {
-                    return; // 丢弃被限速的非关键消息
-                }
-                ws.lastMessageTimes[type] = now;
-            }
-
-            handleMessage(ws, message);
-        } catch (error) {
-            console.error('解析消息错误:', error);
-            // 发送错误响应（使用JSON格式以确保兼容性）
-            ws.send(JSON.stringify({
-                type: 'error',
-                message: '消息格式错误'
-            }));
-        }
-    });
-
-    ws.on('close', () => {
-        console.log('客户端断开连接');
-        
-        // 清理连接超时
-        if (ws.connectionTimeout) {
-            clearTimeout(ws.connectionTimeout);
-        }
-        
-        if (ws.playerId) {
-            console.log(`玩家 ${ws.playerId} 断开连接`);
-            gameState.players.delete(ws.playerId);
-            gameState.clientPing.delete(ws.playerId);
-            gameState.clientUpdateRates.delete(ws.playerId);
-            // messageQueue.delete(ws.playerId); // 已移除消息队列
-            
-            broadcast({
-                type: 'playerLeft',
-                playerId: ws.playerId
-            });
-        }
-    });
-    
-    ws.on('error', (error) => {
-        console.error('WebSocket错误:', error);
-    });
-    
     // 发送连接确认
     ws.send(JSON.stringify({
         type: 'connected',
         serverTime: Date.now(),
         maxMessageSize: 1024 * 10
     }));
-});
+    return ws;
+}
 
-// 心跳检测系统 - 修复版本
-const heartbeatInterval = setInterval(() => {
-    wss.clients.forEach(ws => {
-        if (ws.isAlive === false) {
-            console.log('客户端心跳超时，断开连接');
-            ws.terminate();
-            return;
-        }
-        
-        ws.isAlive = false;
-        
-        // 发送ping
-        if (ws.readyState === WebSocket.OPEN) {
-            try {
-                ws.ping();
-            } catch (error) {
-                console.error('发送ping失败:', error);
-                ws.terminate();
+// 处理玩家发来的原始数据（string 为JSON，ArrayBuffer 为二进制协议）
+function handleClientData(ws, data) {
+    try {
+        // 统计计数（用于监控）
+        ws.messageCount++;
+
+        let message;
+        if (typeof data === 'string') {
+            message = JSON.parse(data);
+        } else {
+            // ArrayBuffer 或 TypedArray
+            const arrayBuffer = data instanceof ArrayBuffer
+                ? data
+                : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+            // 限制消息大小
+            if (arrayBuffer.byteLength > 1024 * 10) { // 最大10KB
+                console.log('消息过大，忽略');
+                return;
+            }
+            message = decodeMessage(arrayBuffer);
+            if (!message) {
+                throw new Error('二进制解码失败');
             }
         }
-    });
-}, 60000); // 60秒检测一次心跳，更宽松
 
-// pong响应现在在connection事件中为每个客户端单独注册
+        // 按类型限速（在解码之后执行）：
+        // - move: 16ms（~60FPS）
+        // - chatMessage: 200ms
+        // - ping: 500ms
+        // - shoot / melee / respawn / 其他: 不限速（由游戏内部CD控制）
+        {
+            const now = Date.now();
+            const type = message && message.type;
+            let minInterval = 0;
+            if (type === 'move') minInterval = 16;
+            else if (type === 'chatMessage') minInterval = 200;
+            else if (type === 'ping') minInterval = 500;
+            const lastTs = ws.lastMessageTimes[type] || 0;
+            if (minInterval > 0 && now - lastTs < minInterval) {
+                return; // 丢弃被限速的非关键消息
+            }
+            ws.lastMessageTimes[type] = now;
+        }
+
+        handleMessage(ws, message);
+    } catch (error) {
+        console.error('解析消息错误:', error);
+        // 发送错误响应（使用JSON格式以确保兼容性）
+        ws.send(JSON.stringify({
+            type: 'error',
+            message: '消息格式错误'
+        }));
+    }
+}
+
+// 处理玩家断开
+function handleClientClose(ws) {
+    if (!ws.isOpen) return;
+    ws.isOpen = false;
+    connections.delete(ws);
+    console.log('客户端断开连接');
+
+    if (ws.playerId) {
+        console.log(`玩家 ${ws.playerId} 断开连接`);
+        gameState.players.delete(ws.playerId);
+        gameState.clientPing.delete(ws.playerId);
+        gameState.clientUpdateRates.delete(ws.playerId);
+        gameState.messageQueue.delete(ws.playerId);
+
+        broadcast({
+            type: 'playerLeft',
+            playerId: ws.playerId
+        });
+    }
+}
 
 // 处理客户端消息
 function handleMessage(ws, message) {
@@ -3029,21 +2847,6 @@ function adaptiveGameLoop() {
     setTimeout(adaptiveGameLoop, Math.min(gameLogicInterval, networkUpdateInterval));
 }
 
-// 启动批处理清理定时器
-setInterval(() => {
-    // 清理空的消息队列
-    gameState.messageQueue.forEach((queue, playerId) => {
-        if (queue.length === 0) {
-            gameState.messageQueue.delete(playerId);
-        }
-    });
-    
-    // 清理压缩缓存
-    if (gameState.compressionCache.size > 100) {
-        gameState.compressionCache.clear();
-    }
-}, 30000); // 每30秒清理一次
-
 // 启动分离的游戏循环
 function startGameSystems() {
     // 游戏逻辑循环 - 固定30FPS
@@ -3059,22 +2862,46 @@ function startGameSystems() {
     adaptiveGameLoop();
 }
 
-// 初始化地形
-gameState.terrain = generateTerrain();
-console.log(`地形初始化完成，生成了 ${gameState.terrain.length} 个地形块`);
+// 启动主机（仅房主页面调用一次）
+let started = false;
+function start() {
+    if (started) return;
+    started = true;
 
-// 启动游戏系统
-startGameSystems();
+    // 初始化地形
+    gameState.terrain = generateTerrain();
+    console.log(`地形初始化完成，生成了 ${gameState.terrain.length} 个地形块`);
 
-// 启动道具生成定时器
-setInterval(spawnPowerup, GAME_CONFIG.POWERUP_SPAWN_INTERVAL);
+    // 启动游戏系统
+    startGameSystems();
 
-// 启动服务器
-const PORT = process.env.PORT || 38080;
-const HOST = '0.0.0.0'; // 监听所有网络接口
-server.listen(PORT, HOST, () => {
-    console.log(`游戏服务器运行在 http://0.0.0.0:${PORT}`);
-    console.log(`本地访问: http://localhost:${PORT}`);
-    console.log(`网络访问: http://[你的IP地址]:${PORT}`);
-    console.log('等待玩家连接...');
-});
+    // 启动道具生成定时器
+    setInterval(spawnPowerup, GAME_CONFIG.POWERUP_SPAWN_INTERVAL);
+
+    // 启动批处理清理定时器
+    setInterval(() => {
+        // 清理空的消息队列
+        gameState.messageQueue.forEach((queue, playerId) => {
+            if (queue.length === 0) {
+                gameState.messageQueue.delete(playerId);
+            }
+        });
+
+        // 清理压缩缓存
+        if (gameState.compressionCache.size > 100) {
+            gameState.compressionCache.clear();
+        }
+    }, 30000); // 每30秒清理一次
+}
+
+return {
+    start,
+    addConnection,
+    addBot,
+    removeBot,
+    setBotCount,
+    get botCount() { return bots.size; },
+    get playerCount() { return gameState.players.size; },
+    get connectionCount() { return connections.size; }
+};
+})();

@@ -3,8 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>不服来战</title>
+    <meta name="description" content="不服来战 — 多人局域网2D射击竞技场。无需服务器，浏览器直连开战。">
+    <title>CUBEFIRE · 立方火线</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2.5 20.5 7.25 12 12 3.5 7.25z' fill='%237dd3fc'/><path d='M3.5 7.25 12 12v9.5L3.5 16.75z' fill='%230ea5e9'/><path d='M20.5 7.25 12 12v9.5l8.5-4.75z' fill='%23075985'/></svg>">
     <style>
+        /* ========== 设计系统 ========== */
+        :root {
+            --bg-0: #070b14;
+            --bg-1: #0b1120;
+            --surface: rgba(13, 20, 36, 0.86);
+            --surface-hi: rgba(23, 32, 54, 0.92);
+            --border: rgba(148, 163, 184, 0.14);
+            --border-strong: rgba(148, 163, 184, 0.30);
+            --text-hi: #f1f5f9;
+            --text-mid: #9aa8bd;
+            --text-low: #5d6b82;
+            --accent: #38bdf8;
+            --accent-deep: #0ea5e9;
+            --accent-2: #818cf8;
+            --gold: #fbbf24;
+            --danger: #f87171;
+            --success: #34d399;
+            --radius: 14px;
+            --radius-sm: 10px;
+            --shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+            --font: system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -12,145 +38,973 @@
         }
 
         body {
-            font-family: 'Arial', sans-serif;
-            background: linear-gradient(135deg, #1e3c72, #2a5298);
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            font-family: var(--font);
+            background: var(--bg-0);
+            color: var(--text-hi);
             min-height: 100vh;
             overflow: hidden;
         }
 
+        .hidden {
+            display: none !important;
+        }
+
+        button {
+            font-family: var(--font);
+        }
+
+        /* ========== 游戏舞台 ========== */
         #gameContainer {
             position: relative;
             width: 100vw;
             height: 100vh;
-            background: #2c3e50;
             overflow: hidden;
+            background:
+                radial-gradient(ellipse 60% 50% at 50% -10%, rgba(56, 189, 248, 0.10), transparent),
+                radial-gradient(ellipse 50% 40% at 85% 110%, rgba(129, 140, 248, 0.08), transparent),
+                var(--bg-0);
+        }
+
+        #gameContainer::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(148, 163, 184, 0.045) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(148, 163, 184, 0.045) 1px, transparent 1px);
+            background-size: 44px 44px;
+            mask-image: radial-gradient(ellipse 80% 70% at 50% 50%, #000 30%, transparent 100%);
+            -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 50%, #000 30%, transparent 100%);
+            pointer-events: none;
+        }
+
+        :root {
+            --sidebar-w: 300px; /* 右侧信息栏宽度 + 边距，画布避开这个区域 */
         }
 
         #gameCanvas {
-            display: block;
-            background: linear-gradient(45deg, #34495e, #2c3e50);
+            position: absolute;
+            left: calc((100vw - var(--sidebar-w)) / 2);
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: min(1200px, calc(100vw - var(--sidebar-w) - 24px), calc((100vh - 150px) * 1.5));
+            height: auto;
             cursor: crosshair;
+            background: #0e1626;
+            border: 1px solid var(--border-strong);
+            border-radius: 12px;
+            box-shadow:
+                0 0 0 1px rgba(56, 189, 248, 0.08),
+                0 0 60px rgba(56, 189, 248, 0.07),
+                0 24px 80px rgba(0, 0, 0, 0.6);
         }
 
+        /* ========== 通用面板 ========== */
+        .hud-panel {
+            background: var(--surface);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+        }
+
+        .hud-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            color: var(--text-mid);
+            text-transform: uppercase;
+        }
+
+        .hud-title::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(90deg, var(--border-strong), transparent);
+        }
+
+        /* ========== 着陆页（登录/大厅） ========== */
         #loginModal {
             position: fixed;
-            top: 0;
-            left: 0;
+            inset: 0;
+            z-index: 1000;
+            overflow-y: auto;
+            background:
+                radial-gradient(ellipse 70% 55% at 50% -15%, rgba(56, 189, 248, 0.16), transparent),
+                radial-gradient(ellipse 45% 40% at 8% 105%, rgba(129, 140, 248, 0.14), transparent),
+                radial-gradient(ellipse 40% 35% at 95% 90%, rgba(14, 165, 233, 0.10), transparent),
+                var(--bg-0);
+        }
+
+        #loginModal::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+            background-size: 44px 44px;
+            mask-image: radial-gradient(ellipse 75% 65% at 50% 40%, #000 20%, transparent 100%);
+            -webkit-mask-image: radial-gradient(ellipse 75% 65% at 50% 40%, #000 20%, transparent 100%);
+            pointer-events: none;
+        }
+
+        #landingFx {
+            position: fixed;
+            inset: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 0, 0, 0.8);
+            z-index: 0;
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        .float-cube {
+            position: absolute;
+            z-index: 0;
+            pointer-events: none;
+            opacity: 0.55;
+            filter: drop-shadow(0 14px 18px rgba(0, 0, 0, 0.5));
+            animation: cubeFloat 7s ease-in-out infinite;
+        }
+
+        .float-cube svg { display: block; width: 100%; height: 100%; }
+        .fc1 { width: 64px; height: 64px; left: 9%; top: 26%; animation-delay: 0s; }
+        .fc2 { width: 42px; height: 42px; right: 11%; top: 22%; animation-delay: -2.2s; }
+        .fc3 { width: 50px; height: 50px; left: 15%; bottom: 24%; animation-delay: -4.1s; }
+        .fc4 { width: 36px; height: 36px; right: 15%; bottom: 30%; animation-delay: -5.6s; }
+
+        @keyframes cubeFloat {
+            0%, 100% { transform: translateY(0) rotate(-2deg); }
+            50% { transform: translateY(-16px) rotate(2.5deg); }
+        }
+
+        @media (max-width: 900px) {
+            .float-cube { display: none; }
+        }
+
+        .landing-shell {
+            position: relative;
+            z-index: 1;
+            min-height: 100vh;
             display: flex;
-            justify-content: center;
+            flex-direction: column;
             align-items: center;
-            z-index: 1000;
+            padding: 28px 24px 20px;
         }
 
-        #loginForm {
-            background: white;
-            padding: 30px;
-            border-radius: 15px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        .landing-topbar {
+            width: 100%;
+            max-width: 1060px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .brand-mark {
+            width: 34px;
+            height: 34px;
+            display: grid;
+            place-items: center;
+            font-size: 18px;
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.22), rgba(129, 140, 248, 0.18));
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            border-radius: 10px;
+            box-shadow: 0 0 18px rgba(56, 189, 248, 0.25);
+        }
+
+        .brand-name {
+            font-size: 15px;
+            font-weight: 800;
+            letter-spacing: 1px;
+        }
+
+        .brand-name em {
+            font-style: normal;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 2.5px;
+            color: var(--text-low);
+            display: block;
+            margin-top: 1px;
+        }
+
+        .topbar-tag {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent);
+            background: rgba(56, 189, 248, 0.10);
+            border: 1px solid rgba(56, 189, 248, 0.30);
+            padding: 6px 14px;
+            border-radius: 999px;
+            letter-spacing: 0.5px;
+        }
+
+        .landing-hero {
             text-align: center;
-            min-width: 300px;
+            margin: clamp(22px, 5.5vh, 64px) 0 clamp(18px, 3.5vh, 40px);
         }
 
-        #loginForm h2 {
-            color: #2c3e50;
-            margin-bottom: 20px;
-            font-size: 24px;
+        .hero-eyebrow {
+            font-size: clamp(13px, 1.4vw, 16px);
+            font-weight: 800;
+            font-family: var(--mono);
+            letter-spacing: 10px;
+            color: var(--accent);
+            text-shadow: 0 0 18px rgba(56, 189, 248, 0.6);
+            margin-bottom: 8px;
+        }
+
+        .hero-title {
+            font-size: clamp(46px, 7vw, 80px);
+            font-weight: 900;
+            letter-spacing: 10px;
+            line-height: 1.1;
+            color: #eaf6ff;
+            /* 2.5D 挤出效果：逐层加深的立体侧面 + 落影 + 霓虹光 */
+            text-shadow:
+                0 1px 0 #a8cfec,
+                0 2px 0 #7fabd0,
+                0 3px 0 #5d88b0,
+                0 4px 0 #426890,
+                0 5px 0 #2d4d71,
+                0 6px 0 #1d3654,
+                0 7px 0 #12253d,
+                0 14px 28px rgba(0, 0, 0, 0.65),
+                0 0 46px rgba(56, 189, 248, 0.35);
+        }
+
+        .hero-sub {
+            margin-top: 14px;
+            font-size: clamp(14px, 1.6vw, 17px);
+            color: var(--text-mid);
+            letter-spacing: 3px;
+        }
+
+        .hero-badges {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 22px;
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-mid);
+            background: rgba(148, 163, 184, 0.07);
+            border: 1px solid var(--border);
+            padding: 7px 15px;
+            border-radius: 999px;
+            backdrop-filter: blur(8px);
+        }
+
+        .hero-badge::before {
+            content: '';
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 8px rgba(56, 189, 248, 0.8);
+        }
+
+        /* 登录卡片 */
+        #loginForm {
+            position: relative;
+            width: min(520px, 100%);
+            background: var(--surface);
+            backdrop-filter: blur(18px);
+            -webkit-backdrop-filter: blur(18px);
+            border: 1px solid var(--border-strong);
+            border-radius: 20px;
+            padding: 26px 28px 22px;
+            box-shadow: var(--shadow), 0 0 0 1px rgba(56, 189, 248, 0.06);
+        }
+
+        #loginForm::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 24px;
+            right: 24px;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.6), transparent);
+        }
+
+        .field-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            color: var(--text-mid);
+            margin-bottom: 8px;
+            text-align: left;
         }
 
         #nicknameInput {
             width: 100%;
-            padding: 12px;
-            border: 2px solid #ddd;
-            border-radius: 8px;
+            padding: 13px 16px;
             font-size: 16px;
-            margin-bottom: 20px;
-            text-align: center;
+            font-family: var(--font);
+            color: var(--text-hi);
+            background: rgba(7, 11, 20, 0.7);
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius-sm);
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            margin-bottom: 18px;
+        }
+
+        #nicknameInput::placeholder {
+            color: var(--text-low);
         }
 
         #nicknameInput:focus {
-            outline: none;
-            border-color: #3498db;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.18);
         }
 
-        #joinButton {
-            background: linear-gradient(45deg, #3498db, #2980b9);
-            color: white;
-            border: none;
-            padding: 12px 30px;
-            border-radius: 8px;
-            font-size: 16px;
+        /* 模式卡片 */
+        .mode-card {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            width: 100%;
+            text-align: left;
+            padding: 14px 16px;
+            margin-bottom: 10px;
+            color: var(--text-hi);
+            background: rgba(148, 163, 184, 0.05);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
             cursor: pointer;
-            transition: transform 0.2s;
+            transition: transform 0.15s, border-color 0.2s, background 0.2s, box-shadow 0.2s;
         }
 
-        #joinButton:hover {
+        .mode-card:hover {
             transform: translateY(-2px);
+            border-color: var(--border-strong);
+            background: rgba(148, 163, 184, 0.09);
         }
 
+        .mode-card.primary {
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.16), rgba(129, 140, 248, 0.10));
+            border-color: rgba(56, 189, 248, 0.45);
+        }
+
+        .mode-card.primary:hover {
+            box-shadow: 0 8px 28px rgba(56, 189, 248, 0.22);
+            border-color: var(--accent);
+        }
+
+        .mode-icon {
+            flex-shrink: 0;
+            width: 42px;
+            height: 42px;
+            display: grid;
+            place-items: center;
+            font-size: 20px;
+            background: rgba(7, 11, 20, 0.55);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+        }
+
+        .mode-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .mode-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 15px;
+            font-weight: 700;
+        }
+
+        .mode-title em {
+            font-style: normal;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            color: #06202e;
+            background: linear-gradient(135deg, var(--accent), #7dd3fc);
+            padding: 2px 8px;
+            border-radius: 999px;
+        }
+
+        .mode-desc {
+            display: block;
+            margin-top: 3px;
+            font-size: 12.5px;
+            color: var(--text-mid);
+        }
+
+        .mode-arrow {
+            flex-shrink: 0;
+            color: var(--text-low);
+            font-size: 18px;
+            transition: transform 0.15s, color 0.2s;
+        }
+
+        .mode-card:hover .mode-arrow {
+            transform: translateX(3px);
+            color: var(--accent);
+        }
+
+        .mode-hint {
+            font-size: 12px;
+            color: var(--text-low);
+            text-align: center;
+            margin-top: 4px;
+        }
+
+        /* 访客加入面板 */
+        .panel-step {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            margin: 14px 0 8px;
+            font-size: 13px;
+            color: var(--text-mid);
+            text-align: left;
+        }
+
+        .step-badge {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            display: grid;
+            place-items: center;
+            font-size: 11px;
+            font-weight: 800;
+            color: #06202e;
+            background: linear-gradient(135deg, var(--accent), #7dd3fc);
+            border-radius: 6px;
+        }
+
+        .panel-step b {
+            color: var(--text-hi);
+        }
+
+        #guestPanel textarea,
+        #invitePanel textarea {
+            width: 100%;
+            font-size: 11px;
+            font-family: var(--mono);
+            color: var(--text-mid);
+            background: rgba(7, 11, 20, 0.7);
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius-sm);
+            padding: 10px;
+            resize: vertical;
+            word-break: break-all;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        #guestPanel textarea:focus,
+        #invitePanel textarea:focus {
+            border-color: var(--accent);
+        }
+
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 11px 18px;
+            margin-top: 10px;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            color: #06202e;
+            background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+            border: none;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.2s, filter 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 22px rgba(56, 189, 248, 0.35);
+            filter: brightness(1.06);
+        }
+
+        .btn.ghost {
+            color: var(--text-mid);
+            background: rgba(148, 163, 184, 0.08);
+            border: 1px solid var(--border);
+        }
+
+        .btn.ghost:hover {
+            color: var(--text-hi);
+            box-shadow: none;
+            border-color: var(--border-strong);
+        }
+
+        .panel-status {
+            font-size: 13px;
+            color: var(--accent);
+            min-height: 18px;
+            margin-top: 10px;
+            text-align: center;
+        }
+
+        .panel-tip {
+            font-size: 12px;
+            color: var(--text-low);
+            margin-top: 8px;
+            text-align: center;
+        }
+
+        /* 着陆页底部：操作说明 + 页脚 */
+        .landing-controls {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 18px;
+            margin-top: clamp(18px, 4vh, 42px);
+        }
+
+        .control-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-mid);
+        }
+
+        .keycap {
+            display: inline-grid;
+            place-items: center;
+            min-width: 26px;
+            height: 26px;
+            padding: 0 7px;
+            font-size: 11px;
+            font-weight: 700;
+            font-family: var(--mono);
+            color: var(--text-hi);
+            background: linear-gradient(180deg, rgba(148, 163, 184, 0.16), rgba(148, 163, 184, 0.06));
+            border: 1px solid var(--border-strong);
+            border-bottom-width: 2px;
+            border-radius: 6px;
+        }
+
+        .landing-footer {
+            margin-top: auto;
+            padding-top: 18px;
+            font-size: 12px;
+            color: var(--text-low);
+            letter-spacing: 0.5px;
+            text-align: center;
+        }
+
+        .landing-footer b {
+            color: var(--text-mid);
+        }
+
+        /* ========== 游戏内 HUD ========== */
+
+        /* 计时器：顶部居中 */
+        #gameTimer {
+            position: absolute;
+            top: 14px;
+            left: calc((100vw - var(--sidebar-w)) / 2);
+            transform: translateX(-50%);
+            z-index: 100;
+            text-align: center;
+            padding: 6px 24px 8px;
+            background: var(--surface);
+            backdrop-filter: blur(14px);
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            min-width: 132px;
+        }
+
+        #timerLabel {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            color: var(--text-low);
+            margin-bottom: 2px;
+        }
+
+        #timerValue {
+            font-size: 22px;
+            font-weight: 800;
+            font-family: var(--mono);
+            color: var(--accent);
+            line-height: 1.1;
+            text-shadow: 0 0 18px rgba(56, 189, 248, 0.45);
+        }
+
+        /* 右侧信息栏 */
+        #hudRight {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            bottom: 16px;
+            width: 268px;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            pointer-events: none;
+        }
+
+        #hudRight > * {
+            pointer-events: auto;
+        }
+
+        #scoreboard {
+            padding: 14px 16px;
+        }
+
+        #scoreboard h3 {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            color: var(--gold);
+            margin-bottom: 10px;
+        }
+
+        #scoreboard h3::before {
+            content: '';
+            width: 3px;
+            height: 12px;
+            border-radius: 2px;
+            background: var(--gold);
+            box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
+        }
+
+        .player-score {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 7px 11px;
+            margin-bottom: 5px;
+            font-size: 13.5px;
+            color: var(--text-mid);
+            background: rgba(148, 163, 184, 0.06);
+            border: 1px solid transparent;
+            border-radius: 8px;
+        }
+
+        .player-score span:last-child {
+            font-family: var(--mono);
+            font-weight: 700;
+            color: var(--text-hi);
+        }
+
+        .player-score.current-player {
+            color: var(--text-hi);
+            background: rgba(56, 189, 248, 0.13);
+            border-color: rgba(56, 189, 248, 0.35);
+        }
+
+        .player-score.current-player span:last-child {
+            color: var(--accent);
+        }
+
+        /* 聊天室 */
+        #chatroom {
+            margin-top: auto; /* 贴底，中部留白，减少拥挤感 */
+            height: min(320px, 40vh);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #chatroom.collapsed {
+            height: auto;
+        }
+
+        #chatroom.collapsed .chat-messages,
+        #chatroom.collapsed .chat-input-container {
+            display: none;
+        }
+
+        .chat-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            cursor: pointer;
+            user-select: none;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            color: var(--text-mid);
+            border-bottom: 1px solid var(--border);
+            background: rgba(148, 163, 184, 0.04);
+        }
+
+        .chat-header::before {
+            content: '';
+            width: 3px;
+            height: 12px;
+            border-radius: 2px;
+            background: var(--accent);
+            box-shadow: 0 0 8px rgba(56, 189, 248, 0.6);
+        }
+
+        .chat-header::after {
+            content: '—';
+            margin-left: auto;
+            color: var(--text-low);
+            font-size: 11px;
+        }
+
+        #chatroom.collapsed .chat-header::after {
+            content: '+';
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 14px;
+            font-size: 13.5px;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(148, 163, 184, 0.3) transparent;
+        }
+
+        .chat-messages::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, 0.3);
+            border-radius: 2px;
+        }
+
+        .chat-message {
+            margin-bottom: 7px;
+            word-wrap: break-word;
+            animation: fadeIn 0.25s ease-in;
+            line-height: 1.45;
+        }
+
+        .chat-message .sender {
+            color: var(--accent);
+            font-weight: 700;
+            font-size: 13px;
+        }
+
+        .chat-message .content {
+            color: var(--text-hi);
+            margin-left: 4px;
+        }
+
+        .chat-message.system {
+            color: var(--text-low);
+            font-style: italic;
+            text-align: center;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .chat-input-container {
+            display: flex;
+            gap: 8px;
+            padding: 10px;
+            border-top: 1px solid var(--border);
+            background: rgba(7, 11, 20, 0.4);
+        }
+
+        #chatInput {
+            flex: 1;
+            min-width: 0;
+            padding: 8px 14px;
+            font-size: 13.5px;
+            font-family: var(--font);
+            color: var(--text-hi);
+            background: rgba(148, 163, 184, 0.08);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        #chatInput::placeholder {
+            color: var(--text-low);
+        }
+
+        #chatInput:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+        }
+
+        #chatSend {
+            flex-shrink: 0;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 700;
+            color: #06202e;
+            background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+            border: none;
+            border-radius: 999px;
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.2s;
+        }
+
+        #chatSend:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 14px rgba(56, 189, 248, 0.35);
+        }
+
+        /* 网络状态 */
+        #networkStatus {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            column-gap: 16px;
+            row-gap: 3px;
+            padding: 9px 14px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .ping-display {
+            display: inline-flex;
+            align-items: center;
+            margin-bottom: 0;
+            font-family: var(--mono);
+            font-size: 13px;
+        }
+
+        .ping-display::before {
+            content: '';
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: currentColor;
+            box-shadow: 0 0 8px currentColor;
+            margin-right: 9px;
+        }
+
+        .ping-display.excellent { color: var(--success); }
+        .ping-display.good { color: var(--accent); }
+        .ping-display.medium { color: var(--gold); }
+        .ping-display.poor {
+            color: var(--danger);
+            animation: networkWarning 1s infinite alternate;
+        }
+
+        @keyframes networkWarning {
+            0% { opacity: 1; }
+            100% { opacity: 0.55; }
+        }
+
+        .network-quality {
+            display: inline-flex;
+            align-items: center;
+            font-size: 11.5px;
+            color: var(--text-mid);
+            margin-bottom: 0;
+        }
+
+        .network-quality::before {
+            content: '';
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: currentColor;
+            opacity: 0.7;
+            margin-right: 9px;
+        }
+
+        .quality-excellent { color: var(--success); }
+        .quality-good { color: var(--accent); }
+        .quality-medium { color: var(--gold); }
+        .quality-poor { color: var(--danger); }
+
+        /* 左下：生命值 / 分数 */
         #ui {
             position: absolute;
-            top: 20px;
-            right: 250px;
+            left: 16px;
+            bottom: 16px;
             z-index: 100;
-            font-family: 'Arial', sans-serif;
         }
-        
+
         .ui-panel {
-            background: linear-gradient(135deg, rgba(0, 0, 0, 0.8), rgba(20, 20, 20, 0.9));
-            backdrop-filter: blur(10px);
-            border: 2px solid rgba(255, 255, 255, 0.2);
-            border-radius: 15px;
-            padding: 15px 20px;
-            margin-bottom: 10px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-            min-width: 200px;
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            background: var(--surface);
+            backdrop-filter: blur(14px);
+            border: 1px solid var(--border-strong);
+            border-radius: 999px;
+            padding: 9px 20px;
+            box-shadow: var(--shadow);
         }
-        
+
         .health-bar-container {
             display: flex;
             align-items: center;
-            margin-bottom: 12px;
+            width: 230px;
         }
-        
+
+        .health-icon,
+        .score-icon {
+            min-width: 36px;
+            text-align: center;
+            padding: 3px 0;
+            margin-right: 11px;
+            font-size: 10px;
+            font-weight: 800;
+            font-family: var(--mono);
+            letter-spacing: 1px;
+            border-radius: 6px;
+        }
+
         .health-icon {
-            font-size: 24px;
-            margin-right: 12px;
-            filter: drop-shadow(0 0 8px #e74c3c);
-            animation: heartBeat 1.5s infinite;
+            color: var(--danger);
+            background: rgba(248, 113, 113, 0.12);
+            border: 1px solid rgba(248, 113, 113, 0.35);
         }
-        
-        @keyframes heartBeat {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-        }
-        
+
         .health-bar {
+            position: relative;
             flex: 1;
-            height: 24px;
-            background: linear-gradient(90deg, #2c3e50, #34495e);
-            border-radius: 12px;
+            height: 22px;
+            background: rgba(7, 11, 20, 0.8);
+            border-radius: 999px;
             overflow: hidden;
-            border: 2px solid rgba(255, 255, 255, 0.3);
-            box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-strong);
+            box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.5);
         }
-        
+
         .health-fill {
             height: 100%;
             background: linear-gradient(90deg, #e74c3c, #c0392b, #e74c3c);
             background-size: 200% 100%;
             animation: healthGlow 2s infinite;
             transition: width 0.3s ease;
-            border-radius: 10px;
+            border-radius: 999px;
             position: relative;
             overflow: hidden;
         }
-        
+
         .health-fill::after {
             content: '';
             position: absolute;
@@ -158,489 +1012,197 @@
             left: -100%;
             width: 100%;
             height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
             animation: healthShine 1.5s infinite;
         }
-        
+
         @keyframes healthGlow {
             0%, 100% { background-position: 0% 0%; }
             50% { background-position: 200% 0%; }
         }
-        
+
         @keyframes healthShine {
             0% { left: -100%; }
             100% { left: 100%; }
         }
-        
+
         .health-text {
             position: absolute;
-            width: 100%;
+            inset: 0;
             text-align: center;
             color: white;
-            font-weight: bold;
-            font-size: 14px;
-            line-height: 24px;
-            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+            font-weight: 700;
+            font-size: 12.5px;
+            line-height: 22px;
+            font-family: var(--mono);
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
         }
-        
+
         .score-container {
             display: flex;
             align-items: center;
-            justify-content: center;
         }
-        
+
         .score-icon {
-            font-size: 24px;
-            margin-right: 10px;
-            filter: drop-shadow(0 0 8px #f39c12);
-            animation: coinSpin 3s infinite linear;
+            color: var(--gold);
+            background: rgba(251, 191, 36, 0.12);
+            border: 1px solid rgba(251, 191, 36, 0.35);
         }
-        
-        @keyframes coinSpin {
-            0% { transform: rotateY(0deg); }
-            100% { transform: rotateY(360deg); }
-        }
-        
+
         .score-value {
-            font-size: 24px;
-            font-weight: bold;
-            color: #f39c12;
-            text-shadow: 0 0 10px rgba(243, 156, 18, 0.5), 0 2px 4px rgba(0, 0, 0, 0.8);
-            font-family: 'Courier New', monospace;
+            font-size: 22px;
+            font-weight: 800;
+            font-family: var(--mono);
+            color: var(--gold);
+            text-shadow: 0 0 14px rgba(251, 191, 36, 0.45);
         }
 
-        #scoreboard {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 15px;
-            border-radius: 10px;
-            color: white;
-            min-width: 200px;
-            z-index: 100;
-        }
-
-        #scoreboard h3 {
-            margin-bottom: 10px;
-            text-align: center;
-            color: #f39c12;
-        }
-
-        .player-score {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 5px;
-            padding: 5px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 5px;
-        }
-
-        .player-score.current-player {
-            background: rgba(52, 152, 219, 0.3);
-            font-weight: bold;
-        }
-
+        /* 底部中央：操作提示 */
         #instructions {
             position: absolute;
-            bottom: 20px;
-            left: 50%;
+            bottom: 18px;
+            left: calc((100vw - var(--sidebar-w)) / 2);
             transform: translateX(-50%);
-            color: white;
-            text-align: center;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 10px 20px;
-            border-radius: 10px;
             z-index: 100;
+            padding: 7px 18px;
+            font-size: 12px;
+            opacity: 0.85;
+            color: var(--text-mid);
+            background: var(--surface);
+            backdrop-filter: blur(14px);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            box-shadow: var(--shadow);
+            white-space: nowrap;
         }
 
-        /* 聊天室样式 */
-        #chatroom {
+        /* 左上：邀请玩家（房主）+ 击杀信息 */
+        #inviteToggle {
             position: absolute;
-            top: 200px;
-            right: 20px;
-            width: 320px;
-            height: 400px;
-            background: linear-gradient(135deg, rgba(0, 0, 0, 0.85), rgba(20, 20, 20, 0.9));
-            backdrop-filter: blur(10px);
-            border: 2px solid rgba(255, 255, 255, 0.2);
-            border-radius: 15px;
-            overflow: hidden;
-            z-index: 100;
-            display: flex;
-            flex-direction: column;
-        }
-        
-        .chat-header {
-            background: linear-gradient(90deg, #3498db, #2980b9);
-            color: white;
-            padding: 10px 15px;
-            font-weight: bold;
-            font-size: 14px;
-            text-align: center;
-            border-radius: 13px 13px 0 0;
-        }
-        
-        .chat-messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 15px;
-            font-size: 14px;
-            color: white;
-            scrollbar-width: thin;
-            scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
-        }
-        
-        .chat-messages::-webkit-scrollbar {
-            width: 4px;
-        }
-        
-        .chat-messages::-webkit-scrollbar-track {
-            background: transparent;
-        }
-        
-        .chat-messages::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.3);
-            border-radius: 2px;
-        }
-        
-        .chat-message {
-            margin-bottom: 8px;
-            word-wrap: break-word;
-            animation: fadeIn 0.3s ease-in;
-        }
-        
-        .chat-message .sender {
-            color: #3498db;
-            font-weight: bold;
-            font-size: 13px;
-        }
-        
-        .chat-message .content {
-            color: #ecf0f1;
-            margin-left: 5px;
-        }
-        
-        .chat-message.system {
-            color: #95a5a6;
-            font-style: italic;
-            text-align: center;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .chat-input-container {
-            display: flex;
-            padding: 8px;
-            background: rgba(255, 255, 255, 0.1);
-            border-top: 1px solid rgba(255, 255, 255, 0.2);
-        }
-        
-        #chatInput {
-            flex: 1;
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            border-radius: 15px;
-            padding: 8px 15px;
-            color: white;
-            font-size: 14px;
-            outline: none;
-        }
-        
-        #chatInput::placeholder {
-            color: rgba(255, 255, 255, 0.6);
-        }
-        
-        #chatInput:focus {
-            border-color: #3498db;
-            box-shadow: 0 0 8px rgba(52, 152, 219, 0.3);
-        }
-        
-        #chatSend {
-            background: linear-gradient(45deg, #3498db, #2980b9);
+            top: 16px;
+            left: 16px;
+            z-index: 1100;
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 8px 16px;
+            font-size: 12.5px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: #052015;
+            background: linear-gradient(135deg, var(--success), #10b981);
             border: none;
-            color: white;
-            padding: 8px 15px;
-            border-radius: 15px;
-            margin-left: 8px;
+            border-radius: 999px;
             cursor: pointer;
-            font-size: 14px;
-            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 6px 22px rgba(52, 211, 153, 0.35);
+            transition: transform 0.15s, box-shadow 0.2s;
         }
-        
-        #chatSend:hover {
+
+        #inviteToggle:hover {
             transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.4);
-        }
-        
-        #chatSend:active {
-            transform: translateY(0);
+            box-shadow: 0 8px 28px rgba(52, 211, 153, 0.45);
         }
 
-        .hidden {
-            display: none !important;
-        }
-
-        /* 游戏计时器样式 */
-        #gameTimer {
+        #invitePanel {
             position: absolute;
-            top: 20px;
-            right: 470px;
-            background: rgba(0, 0, 0, 0.8);
-            color: white;
-            padding: 10px 20px;
-            border-radius: 10px;
+            top: 64px;
+            left: 16px;
+            z-index: 1100;
+            width: 350px;
+            padding: 20px 22px;
+            background: var(--surface-hi);
+            backdrop-filter: blur(18px);
+            border: 1px solid var(--border-strong);
+            border-radius: 16px;
+            box-shadow: var(--shadow);
             text-align: center;
-            z-index: 100;
-            border: 2px solid #3498db;
-            min-width: 120px;
         }
 
-        #timerLabel {
-            font-size: 12px;
-            margin-bottom: 5px;
-            color: #bdc3c7;
-        }
-
-        #timerValue {
-            font-size: 24px;
-            font-weight: bold;
-            color: #3498db;
-        }
-        
-        /* 网络状态显示 */
-        #networkStatus {
-            position: absolute;
-            top: 620px;
-            right: 20px;
-            background: linear-gradient(135deg, rgba(0, 0, 0, 0.8), rgba(20, 20, 20, 0.9));
-            backdrop-filter: blur(10px);
-            border: 2px solid rgba(255, 255, 255, 0.2);
-            border-radius: 12px;
-            padding: 12px 16px;
-            color: white;
-            font-size: 14px;
-            font-weight: bold;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-            z-index: 150;
-            min-width: 120px;
-        }
-        
-        .ping-display {
-            display: flex;
-            align-items: center;
-            margin-bottom: 8px;
-        }
-        
-        .ping-display::before {
-            content: '🌐';
-            margin-right: 8px;
+        #invitePanel h3 {
             font-size: 16px;
+            font-weight: 800;
+            margin-bottom: 4px;
         }
-        
-        .ping-display.excellent {
-            color: #27ae60;
-        }
-        
-        .ping-display.good {
-            color: #f39c12;
-        }
-        
-        .ping-display.medium {
-            color: #e67e22;
-        }
-        
-        .ping-display.poor {
-            color: #e74c3c;
-            animation: networkWarning 1s infinite alternate;
-        }
-        
-        @keyframes networkWarning {
-            0% { opacity: 1; }
-            100% { opacity: 0.6; }
-        }
-        
-        .network-quality {
+
+        .bot-row {
             display: flex;
             align-items: center;
-            font-size: 12px;
-            color: #bdc3c7;
-        }
-        
-        .network-quality::before {
-            content: '📡';
-            margin-right: 6px;
-        }
-        
-        .quality-excellent {
-            color: #27ae60;
-        }
-        
-        .quality-good {
-            color: #3498db;
-        }
-        
-        .quality-medium {
-            color: #f39c12;
-        }
-        
-        .quality-poor {
-            color: #e74c3c;
-        }
-
-        /* 游戏结束公告样式 */
-        #gameEndModal {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.9);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-        }
-
-        #gameEndContent {
-            background: linear-gradient(135deg, #2c3e50, #34495e);
-            color: white;
-            padding: 40px;
-            border-radius: 20px;
-            text-align: center;
-            border: 3px solid #3498db;
-            box-shadow: 0 0 30px rgba(52, 152, 219, 0.5);
-            min-width: 400px;
-        }
-
-        #gameEndTitle {
-            font-size: 36px;
-            margin-bottom: 30px;
-            color: #e74c3c;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
-        }
-
-        #scoreboard h3, #finalScoreboard h3, #countdown h3 {
-            color: #3498db;
-            margin-bottom: 15px;
-            font-size: 20px;
-        }
-
-        #finalScores {
-            margin-bottom: 30px;
-        }
-
-        .score-item {
-            display: flex;
             justify-content: space-between;
-            padding: 8px 15px;
-            margin: 5px 0;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            border-left: 4px solid #3498db;
+            margin: 14px 0 4px;
+            padding: 10px 14px;
+            background: rgba(148, 163, 184, 0.06);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
         }
 
-        .score-item:first-child {
-            border-left-color: #f39c12;
-            background: rgba(243, 156, 18, 0.2);
+        .bot-label {
+            font-size: 13.5px;
+            font-weight: 700;
+            color: var(--text-hi);
         }
 
-        .score-item:nth-child(2) {
-            border-left-color: #95a5a6;
-            background: rgba(149, 165, 166, 0.2);
-        }
-
-        .score-item:nth-child(3) {
-            border-left-color: #e67e22;
-            background: rgba(230, 126, 34, 0.2);
-        }
-
-        #countdownValue {
-            font-size: 48px;
-            font-weight: bold;
-            color: #e74c3c;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
-            margin: 20px 0;
-        }
-
-        /* 新游戏开始弹窗样式 */
-        #newGameModal {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.9);
+        .bot-stepper {
             display: flex;
-            justify-content: center;
             align-items: center;
-            z-index: 1000;
+            gap: 4px;
         }
 
-        #newGameContent {
-            background: linear-gradient(135deg, #27ae60, #2ecc71);
-            color: white;
-            padding: 40px;
-            border-radius: 20px;
+        .bot-stepper button {
+            width: 30px;
+            height: 30px;
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text-hi);
+            background: rgba(148, 163, 184, 0.10);
+            border: 1px solid var(--border-strong);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+
+        .bot-stepper button:hover {
+            background: rgba(56, 189, 248, 0.18);
+            border-color: var(--accent);
+        }
+
+        #botCountLabel {
+            min-width: 34px;
             text-align: center;
-            border: 3px solid #f39c12;
-            box-shadow: 0 0 30px rgba(39, 174, 96, 0.5);
-            min-width: 400px;
+            font-size: 15px;
+            font-weight: 800;
+            font-family: var(--mono);
+            color: var(--accent);
         }
 
-        #newGameTitle {
-            font-size: 36px;
-            margin-bottom: 30px;
-            color: #ffffff;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        .panel-divider {
+            height: 1px;
+            margin: 14px 0 2px;
+            background: linear-gradient(90deg, transparent, var(--border-strong), transparent);
         }
 
-        #newGameCountdown h3 {
-            color: #ffffff;
-            margin-bottom: 15px;
-            font-size: 20px;
-        }
-
-        #newGameCountdownValue {
-            font-size: 72px;
-            font-weight: bold;
-            color: #f39c12;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
-            margin: 20px 0;
-            animation: newGamePulse 1s infinite;
-        }
-
-        @keyframes newGamePulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-        }
-
-        /* 击杀信息样式 - CS风格 */
         #killFeed {
             position: absolute;
-            top: 20px;
-            left: 20px;
+            top: 70px;
+            left: 16px;
             z-index: 1000;
             pointer-events: none;
-            max-width: 300px;
+            max-width: 320px;
         }
 
         .kill-notification {
-            background: linear-gradient(135deg, rgba(0, 0, 0, 0.95), rgba(20, 20, 20, 0.9));
-            color: white;
-            padding: 12px 18px;
+            background: var(--surface-hi);
+            backdrop-filter: blur(10px);
+            color: var(--text-hi);
+            padding: 11px 16px;
             margin-bottom: 8px;
-            border-radius: 10px;
-            border-left: 5px solid #e74c3c;
-            font-size: 14px;
-            font-weight: bold;
-            min-width: 280px;
-            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6), 0 0 20px rgba(231, 76, 60, 0.3);
-            backdrop-filter: blur(8px);
-            transform: translateX(-100%);
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--danger);
+            font-size: 13.5px;
+            font-weight: 700;
+            min-width: 270px;
+            box-shadow: var(--shadow);
+            transform: translateX(-110%);
             opacity: 0;
             transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
             position: relative;
@@ -654,7 +1216,7 @@
             left: -100%;
             width: 100%;
             height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
             transition: left 0.6s ease;
         }
 
@@ -667,53 +1229,162 @@
             opacity: 1;
         }
 
-        .kill-notification:not(.show) {
-            transform: translateX(-100%);
-            opacity: 0;
-        }
-
-        .killer {
-            color: #e74c3c;
-            font-weight: bold;
-        }
-
-        .victim {
-            color: #95a5a6;
-            font-weight: bold;
-        }
+        .killer { color: var(--danger); }
+        .victim { color: var(--text-mid); }
 
         .weapon {
-            color: #f39c12;
+            color: var(--gold);
             font-size: 12px;
-            margin: 0 8px;
-            font-weight: normal;
+            margin: 0 7px;
+            font-weight: 500;
         }
 
-        .kill-icon {
-            color: #e74c3c;
-            margin-right: 8px;
-            font-size: 16px;
+        /* ========== 结算 / 开局弹窗 ========== */
+        #gameEndModal,
+        #newGameModal {
+            position: fixed;
+            inset: 0;
+            z-index: 1200;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: rgba(4, 7, 13, 0.82);
+            backdrop-filter: blur(8px);
         }
 
-        @keyframes killSlideIn {
-            from {
-                transform: translateX(-100%);
-                opacity: 0;
-            }
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
+        #gameEndContent,
+        #newGameContent {
+            position: relative;
+            min-width: 420px;
+            max-width: 90vw;
+            padding: 38px 44px 34px;
+            text-align: center;
+            background: var(--surface-hi);
+            border: 1px solid var(--border-strong);
+            border-radius: 22px;
+            box-shadow: var(--shadow), 0 0 80px rgba(56, 189, 248, 0.12);
         }
 
-        @keyframes killFadeOut {
-            from {
-                opacity: 1;
-                transform: translateX(0);
+        #gameEndContent::before,
+        #newGameContent::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 40px;
+            right: 40px;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.7), transparent);
+        }
+
+        #gameEndTitle {
+            font-size: 32px;
+            font-weight: 900;
+            letter-spacing: 4px;
+            margin-bottom: 24px;
+            background: linear-gradient(180deg, #fff, #fca5a5);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        #finalScoreboard h3,
+        #countdown h3,
+        #newGameCountdown h3 {
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            color: var(--text-mid);
+            margin-bottom: 12px;
+        }
+
+        #finalScores {
+            margin-bottom: 26px;
+        }
+
+        .score-item {
+            display: flex;
+            justify-content: space-between;
+            gap: 30px;
+            padding: 9px 16px;
+            margin: 6px 0;
+            font-size: 14.5px;
+            background: rgba(148, 163, 184, 0.06);
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--accent);
+            border-radius: var(--radius-sm);
+        }
+
+        .score-item span:last-child {
+            font-family: var(--mono);
+            font-weight: 700;
+        }
+
+        .score-item:first-child {
+            border-left-color: var(--gold);
+            background: rgba(251, 191, 36, 0.10);
+        }
+
+        .score-item:nth-child(2) {
+            border-left-color: #cbd5e1;
+            background: rgba(203, 213, 225, 0.08);
+        }
+
+        .score-item:nth-child(3) {
+            border-left-color: #d97706;
+            background: rgba(217, 119, 6, 0.10);
+        }
+
+        #countdownValue {
+            font-size: 52px;
+            font-weight: 900;
+            font-family: var(--mono);
+            color: var(--danger);
+            text-shadow: 0 0 30px rgba(248, 113, 113, 0.4);
+            margin: 10px 0 4px;
+        }
+
+        #newGameTitle {
+            font-size: 32px;
+            font-weight: 900;
+            letter-spacing: 4px;
+            margin-bottom: 24px;
+            background: linear-gradient(180deg, #fff, #86efac);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        #newGameCountdownValue {
+            font-size: 76px;
+            font-weight: 900;
+            font-family: var(--mono);
+            color: var(--success);
+            text-shadow: 0 0 34px rgba(52, 211, 153, 0.45);
+            margin: 12px 0 4px;
+            animation: newGamePulse 1s infinite;
+        }
+
+        @keyframes newGamePulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        /* ========== 响应式 ========== */
+        @media (max-width: 1500px) {
+            :root { --sidebar-w: 280px; }
+            #hudRight { width: 248px; }
+        }
+
+        @media (max-width: 900px) {
+            :root { --sidebar-w: 252px; }
+            #hudRight {
+                width: 220px;
             }
-            to {
-                opacity: 0;
-                transform: translateX(-20px);
+            #instructions {
+                display: none;
+            }
+            .landing-controls {
+                gap: 12px;
             }
         }
     </style>
@@ -722,21 +1393,91 @@
 <body>
     <div id="gameContainer">
         <canvas id="gameCanvas"></canvas>
-        
-        <!-- 网络状态显示 -->
-        <div id="networkStatus" class="hidden">
-            <div id="pingDisplay" class="ping-display good">50ms</div>
-            <div id="networkQuality" class="network-quality quality-good">良好</div>
-            <div id="fpsDisplay" class="network-quality">FPS: --</div>
-            <div id="rateDisplay" class="network-quality">⬇︎ 0 msg/s | ⬆︎ 0 msg/s</div>
-        </div>
-        
-        <!-- 游戏计时器 -->
+
+        <!-- 计时器：顶部居中 -->
         <div id="gameTimer">
-            <div id="timerLabel">本局剩余时间</div>
+            <div id="timerLabel">剩余时间</div>
             <div id="timerValue">120s</div>
         </div>
-        
+
+        <!-- 房主：邀请玩家浮动按钮与面板（左上） -->
+        <button id="inviteToggle" class="hidden">对战设置</button>
+        <div id="invitePanel" class="hidden">
+            <h3>对战设置</h3>
+            <div class="bot-row">
+                <span class="bot-label">AI 机器人</span>
+                <div class="bot-stepper">
+                    <button id="botMinus" title="减少机器人">−</button>
+                    <span id="botCountLabel">0</span>
+                    <button id="botPlus" title="增加机器人">+</button>
+                </div>
+            </div>
+            <div class="panel-divider"></div>
+            <p class="panel-tip">邀请真人玩家：每位新玩家需要一份新的邀请码（一次邀请一人）</p>
+            <button id="genInviteButton" class="btn">生成邀请码</button>
+            <div id="inviteExchange" class="hidden">
+                <div class="panel-step"><span class="step-badge">1</span><span>把<b>邀请码</b>发给对方</span></div>
+                <textarea id="inviteCodeOutput" readonly rows="3"></textarea>
+                <button id="copyInviteButton" class="btn ghost">复制邀请码</button>
+                <div class="panel-step"><span class="step-badge">2</span><span>把对方回传的<b>应答码</b>粘贴到下面</span></div>
+                <textarea id="answerCodeInput" placeholder="粘贴应答码..." rows="3"></textarea>
+                <button id="confirmAnswerButton" class="btn">确认连接</button>
+            </div>
+            <p id="inviteStatus" class="panel-status"></p>
+            <p id="inviteCount" class="panel-tip"></p>
+            <button id="closeInviteButton" class="btn ghost">关闭</button>
+        </div>
+
+        <!-- 击杀信息（左上，位于邀请按钮下方） -->
+        <div id="killFeed"></div>
+
+        <!-- 右侧信息栏：排行榜 / 聊天室 / 网络状态 -->
+        <aside id="hudRight">
+            <div id="scoreboard" class="hud-panel hidden">
+                <h3>排行榜</h3>
+                <div id="playersList"></div>
+            </div>
+
+            <div id="chatroom" class="hud-panel hidden">
+                <div class="chat-header">聊天室</div>
+                <div class="chat-messages" id="chatMessages"></div>
+                <div class="chat-input-container">
+                    <input type="text" id="chatInput" placeholder="输入消息，/bot 3 召唤机器人" maxlength="100">
+                    <button id="chatSend">发送</button>
+                </div>
+            </div>
+
+            <div id="networkStatus" class="hud-panel hidden">
+                <div id="pingDisplay" class="ping-display good">--ms</div>
+                <div id="networkQuality" class="network-quality quality-good">良好</div>
+                <div id="fpsDisplay" class="network-quality">FPS: --</div>
+                <div id="rateDisplay" class="network-quality">↓ 0 pkt/s · ↑ 0 pkt/s</div>
+            </div>
+        </aside>
+
+        <!-- 左下：生命值 / 分数 -->
+        <div id="ui" class="hidden">
+            <div class="ui-panel">
+                <div class="health-bar-container">
+                    <div class="health-icon">HP</div>
+                    <div class="health-bar">
+                        <div class="health-fill" id="healthFill" style="width: 100%"></div>
+                        <div class="health-text"><span id="health">100</span>/100</div>
+                    </div>
+                </div>
+
+                <div class="score-container">
+                    <div class="score-icon">PTS</div>
+                    <div class="score-value"><span id="score">0</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部中央：操作提示 -->
+        <div id="instructions" class="hidden">
+            <div><span class="keycap">WASD</span> 移动&nbsp;&nbsp;<span class="keycap">鼠标</span> 瞄准&nbsp;&nbsp;<span class="keycap">左键</span> 射击&nbsp;&nbsp;<span class="keycap">右键</span> 近战&nbsp;&nbsp;<span class="keycap">空格</span> 复活&nbsp;&nbsp;<span class="keycap">M</span> 静音</div>
+        </div>
+
         <!-- 游戏结束公告 -->
         <div id="gameEndModal" class="hidden">
             <div id="gameEndContent">
@@ -751,7 +1492,7 @@
                 </div>
             </div>
         </div>
-        
+
         <!-- 新游戏开始公告 -->
         <div id="newGameModal" class="hidden">
             <div id="newGameContent">
@@ -762,56 +1503,100 @@
                 </div>
             </div>
         </div>
-        
-        <!-- 击杀信息显示 -->
-        <div id="killFeed"></div>
-        
-        <div id="loginModal">
-            <div id="loginForm">
-                <h2>不服来战</h2>
-                <input type="text" id="nicknameInput" placeholder="输入你的昵称" maxlength="15">
-                <br>
-                <button id="joinButton">加入战场</button>
-            </div>
-        </div>
 
-        <div id="ui" class="hidden">
-            <div class="ui-panel">
-                <div class="health-bar-container">
-                    <div class="health-icon">❤️</div>
-                    <div class="health-bar">
-                        <div class="health-fill" id="healthFill" style="width: 100%"></div>
-                        <div class="health-text"><span id="health">100</span>/100</div>
+        <!-- 着陆页 / 联机大厅 -->
+        <div id="loginModal">
+            <canvas id="landingFx"></canvas>
+            <div class="landing-shell">
+                <div class="float-cube fc1"><svg viewBox="0 0 24 24"><path d="M12 2.5 20.5 7.25 12 12 3.5 7.25z" fill="#7dd3fc"/><path d="M3.5 7.25 12 12v9.5L3.5 16.75z" fill="#0ea5e9"/><path d="M20.5 7.25 12 12v9.5l8.5-4.75z" fill="#075985"/></svg></div>
+                <div class="float-cube fc2"><svg viewBox="0 0 24 24"><path d="M12 2.5 20.5 7.25 12 12 3.5 7.25z" fill="#fcd34d"/><path d="M3.5 7.25 12 12v9.5L3.5 16.75z" fill="#d97706"/><path d="M20.5 7.25 12 12v9.5l8.5-4.75z" fill="#92400e"/></svg></div>
+                <div class="float-cube fc3"><svg viewBox="0 0 24 24"><path d="M12 2.5 20.5 7.25 12 12 3.5 7.25z" fill="#fca5a5"/><path d="M3.5 7.25 12 12v9.5L3.5 16.75z" fill="#ef4444"/><path d="M20.5 7.25 12 12v9.5l8.5-4.75z" fill="#7f1d1d"/></svg></div>
+                <div class="float-cube fc4"><svg viewBox="0 0 24 24"><path d="M12 2.5 20.5 7.25 12 12 3.5 7.25z" fill="#86efac"/><path d="M3.5 7.25 12 12v9.5L3.5 16.75z" fill="#22c55e"/><path d="M20.5 7.25 12 12v9.5l8.5-4.75z" fill="#14532d"/></svg></div>
+                <div class="landing-topbar">
+                    <div class="brand">
+                        <div class="brand-mark"><svg width="20" height="20" viewBox="0 0 24 24"><path d="M12 2.5 20.5 7.25 12 12 3.5 7.25z" fill="#7dd3fc"/><path d="M3.5 7.25 12 12v9.5L3.5 16.75z" fill="#0ea5e9"/><path d="M20.5 7.25 12 12v9.5l8.5-4.75z" fill="#075985"/></svg></div>
+                        <div class="brand-name">立方火线<em>CUBEFIRE</em></div>
+                    </div>
+                    <div class="topbar-tag">无服务器 · 浏览器直连</div>
+                </div>
+
+                <div class="landing-hero">
+                    <p class="hero-eyebrow">CUBEFIRE</p>
+                    <h1 class="hero-title">立方火线</h1>
+                    <p class="hero-sub">不服来战 · 多人局域网 2.5D 射击竞技场</p>
+                    <div class="hero-badges">
+                        <span class="hero-badge">射击 + 近战</span>
+                        <span class="hero-badge">道具增益系统</span>
+                        <span class="hero-badge">AI 机器人对战</span>
+                        <span class="hero-badge">WebRTC P2P 直连</span>
                     </div>
                 </div>
-                
-                <div class="score-container">
-                    <div class="score-icon">🏆</div>
-                    <div class="score-value"><span id="score">0</span></div>
+
+                <div id="loginForm">
+                    <label class="field-label" for="nicknameInput">玩家昵称</label>
+                    <input type="text" id="nicknameInput" placeholder="输入你的昵称，准备开战" maxlength="15">
+
+                    <div id="modeButtons">
+                        <button id="createRoomButton" class="mode-card primary">
+                            <span class="mode-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg></span>
+                            <span class="mode-info">
+                                <span class="mode-title">创建房间 <em>推荐</em></span>
+                                <span class="mode-desc">我当房主，浏览器直接开局，无需任何服务器</span>
+                            </span>
+                            <span class="mode-arrow">→</span>
+                        </button>
+                        <button id="joinRoomButton" class="mode-card">
+                            <span class="mode-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9aa8bd" stroke-width="1.8" stroke-linecap="round"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg></span>
+                            <span class="mode-info">
+                                <span class="mode-title">加入房间</span>
+                                <span class="mode-desc">粘贴房主的邀请码，直连进入对局</span>
+                            </span>
+                            <span class="mode-arrow">→</span>
+                        </button>
+                        <button id="joinButton" class="mode-card">
+                            <span class="mode-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9aa8bd" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/></svg></span>
+                            <span class="mode-info">
+                                <span class="mode-title">连接服务器</span>
+                                <span class="mode-desc">经典模式，连接 WebSocket 游戏服务器</span>
+                            </span>
+                            <span class="mode-arrow">→</span>
+                        </button>
+                        <p id="serverModeHint" class="mode-hint">局域网房间由房主浏览器运行游戏逻辑，玩家之间 P2P 直连</p>
+                    </div>
+
+                    <div id="guestPanel" class="hidden">
+                        <div class="panel-step"><span class="step-badge">1</span><span>把房主发给你的<b>邀请码</b>粘贴到下面</span></div>
+                        <textarea id="inviteCodeInput" placeholder="粘贴邀请码..." rows="3"></textarea>
+                        <button id="genAnswerButton" class="btn">生成应答码</button>
+                        <div id="guestAnswerArea" class="hidden">
+                            <div class="panel-step"><span class="step-badge">2</span><span>把下面的<b>应答码</b>发回给房主，等待确认</span></div>
+                            <textarea id="answerCodeOutput" readonly rows="3"></textarea>
+                            <button id="copyAnswerButton" class="btn ghost">复制应答码</button>
+                        </div>
+                        <p id="guestStatus" class="panel-status"></p>
+                        <button id="guestBackButton" class="btn ghost">← 返回模式选择</button>
+                    </div>
+                </div>
+
+                <div class="landing-controls">
+                    <span class="control-item"><span class="keycap">W A S D</span> 移动</span>
+                    <span class="control-item"><span class="keycap">鼠标</span> 瞄准</span>
+                    <span class="control-item"><span class="keycap">左键</span> 射击</span>
+                    <span class="control-item"><span class="keycap">右键</span> 近战</span>
+                    <span class="control-item"><span class="keycap">空格</span> 复活</span>
+                    <span class="control-item"><span class="keycap">M</span> 静音</span>
+                </div>
+
+                <div class="landing-footer">
+                    <b>CUBEFIRE · 立方火线</b> · 2 分钟一局 · 击杀 +100 分 命中 +10 分 · 支持局域网多人同屏对战
                 </div>
             </div>
-        </div>
-
-        <div id="scoreboard" class="hidden">
-            <h3>🏆 排行榜</h3>
-            <div id="playersList"></div>
-        </div>
-        
-        <!-- 聊天室 -->
-        <div id="chatroom" class="hidden">
-            <div class="chat-header">💬 聊天室</div>
-            <div class="chat-messages" id="chatMessages"></div>
-            <div class="chat-input-container">
-                <input type="text" id="chatInput" placeholder="输入消息..." maxlength="100">
-                <button id="chatSend">发送</button>
-            </div>
-        </div>
-
-        <div id="instructions" class="hidden">
-            <div>WASD 移动 | 鼠标瞄准 | 左键射击 | 空格键复活</div>
         </div>
     </div>
 
+    <script src="sound.js"></script>
+    <script src="host-core.js"></script>
     <script src="game.js"></script>
+    <script src="lan.js"></script>
 </body>
 </html>

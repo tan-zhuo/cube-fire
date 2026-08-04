@@ -383,6 +383,37 @@ class Effect {
     }
 }
 
+// 伤害数字飘字
+class DamageNumber {
+    constructor(x, y, text, color) {
+        this.x = x + (Math.random() - 0.5) * 12;
+        this.y = y;
+        this.text = text;
+        this.color = color;
+        this.life = 1; // 1 -> 0
+    }
+
+    update() {
+        this.y -= 0.7;
+        this.life -= 0.022;
+    }
+
+    isDead() { return this.life <= 0; }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, this.life);
+        ctx.font = 'bold 14px ui-monospace, Consolas, monospace';
+        ctx.textAlign = 'center';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.strokeText(this.text, this.x, this.y);
+        ctx.fillStyle = this.color;
+        ctx.fillText(this.text, this.x, this.y);
+        ctx.restore();
+    }
+}
+
 class GameClient {
     constructor() {
         this.canvas = document.getElementById('gameCanvas');
@@ -404,6 +435,10 @@ class GameClient {
         this.effects = [];
         this.meleeIndicators = [];
         this.knifeSwingEffects = [];
+        this.damageNumbers = [];
+        this.shakeMag = 0;
+        this.flashAlpha = 0;
+        this.flashColor = '#ffffff';
         this.keys = {};
         this.mouse = { x: 0, y: 0 };
         this.lastUpdate = 0;
@@ -478,7 +513,6 @@ class GameClient {
         this.scale = Math.min(this.scaleX, this.scaleY);
         
         // 不需要再乘以devicePixelRatio，因为getBoundingClientRect已经是CSS像素
-        console.log(`屏幕信息: devicePixelRatio=${devicePixelRatio}, scaleX=${this.scaleX.toFixed(3)}, scaleY=${this.scaleY.toFixed(3)}`);
     }
 
     setupEventListeners() {
@@ -499,9 +533,6 @@ class GameClient {
 
         // 鼠标事件
         this.canvas.addEventListener('mousemove', (e) => {
-            // 确保缩放比例是最新的
-            this.updateScale();
-            
             const rect = this.canvas.getBoundingClientRect();
             // 将鼠标坐标转换为游戏世界坐标（1200x800）
             // 使用CSS像素计算，不需要考虑devicePixelRatio
@@ -571,11 +602,16 @@ class GameClient {
             return;
         }
 
-        // 连接WebSocket服务器（自动检测当前主机地址）
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const host = window.location.hostname;
-        const port = '38080';
-        this.ws = new WebSocket(`${protocol}//${host}:${port}`);
+        // 优先使用页面提供的传输工厂（无服务器局域网版：本地回环或WebRTC DataChannel），
+        // 否则连接WebSocket服务器（自动检测当前主机地址）
+        if (window.createGameTransport) {
+            this.ws = window.createGameTransport();
+        } else {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.hostname;
+            const port = '38080';
+            this.ws = new WebSocket(`${protocol}//${host}:${port}`);
+        }
         this.ws.binaryType = 'arraybuffer';
 
         // 包装send以统计上行消息数
@@ -870,6 +906,11 @@ class GameClient {
                 const timestamp = decoder.readUint32();
                 const remainingTime = decoder.readUint32();
                 const isGameEnded = decoder.readUint8() === 1;
+                // 自愈：游戏已在进行但结算/开局弹窗还挂着（gameStarted消息丢失时的兜底）
+                if (!isGameEnded) {
+                    this.hideGameEndModal();
+                    this.hideNewGameModal();
+                }
                 // section-based TLV until 0xFF
                 while (true) {
                     const section = decoder.readUint8();
@@ -943,10 +984,10 @@ class GameClient {
                                 const lockWindow = 160;
                                 const locked = (axis) => cur[`blockMove${axis}`] && (Date.now() - (cur.blockMoveAt || 0) < lockWindow);
                                 if (nx !== undefined) {
-                                    if (locked('X')) cur.x = nx; else if (cur.x !== undefined) cur.x = cur.x + (nx - cur.x) * fSelf; else cur.x = nx;
+                                    cur.x = locked('X') ? nx : this.correctSelfAxis(cur.x, nx);
                                 }
                                 if (ny !== undefined) {
-                                    if (locked('Y')) cur.y = ny; else if (cur.y !== undefined) cur.y = cur.y + (ny - cur.y) * fSelf; else cur.y = ny;
+                                    cur.y = locked('Y') ? ny : this.correctSelfAxis(cur.y, ny);
                                 }
                                 if (nAngle !== undefined) cur.angle = nAngle;
                             } else {
@@ -984,6 +1025,9 @@ class GameClient {
                             const ownerId = decoder.readUint32();
                             if (!this.bullets.find(b => b.id === id)) {
                                 this.bullets.push({ id, x, y, vx, vy, ownerId, damage: 25 });
+                                if (ownerId !== this.playerId && window.gameSound) {
+                                    window.gameSound.shoot(this.volFor(x, y) * 0.6);
+                                }
                             }
                         }
                     } else if (section === 0x13) { // removedBullets
@@ -993,12 +1037,13 @@ class GameClient {
                             this.bullets = this.bullets.filter(b => b.id !== id);
                         }
                     } else if (section === 0x04) { // newPowerups
+                        // 与服务端 encodeIncrementalUpdate 对齐：id(u32) x(u16) y(u16) typeId(u8)
                         const n = decoder.readUint16();
                         for (let i = 0; i < n; i++) {
                             const id = decoder.readUint32();
+                            const x = decoder.readUint16();
+                            const y = decoder.readUint16();
                             const typeId = decoder.readUint8();
-                            const x = decoder.readFloat32();
-                            const y = decoder.readFloat32();
                             const type = this.getPowerupTypeById(typeId);
                             if (!this.powerups.find(p => p.id === id)) this.powerups.push({ id, type, x, y });
                         }
@@ -1029,6 +1074,10 @@ class GameClient {
                     const health = decoder.readUint8();
                     players.push({ id, nickname, score, isAlive, health });
                 }
+                if (!this._endSoundPlayed) {
+                    this._endSoundPlayed = true;
+                    if (window.gameSound) window.gameSound.gameEnd();
+                }
                 this.showGameEndModal(players);
                 this.updateCountdown(countdown, showingResults);
                 return;
@@ -1045,6 +1094,8 @@ class GameClient {
             if (msgType === MESSAGE_TYPES.GAME_STARTED) {
                 this.hideNewGameModal();
                 this.hideGameEndModal();
+                this._endSoundPlayed = false;
+                if (window.gameSound) window.gameSound.gameStart();
                 return;
             }
 
@@ -1102,6 +1153,23 @@ class GameClient {
                 const targetPlayer = this.players.get(targetId);
                 if (targetPlayer) {
                     this.effects.push(new Effect(targetPlayer.x + 10, targetPlayer.y + 10, 'hit'));
+                    this.damageNumbers.push(new DamageNumber(
+                        targetPlayer.x + 10, targetPlayer.y - 8, '-' + damage,
+                        targetId === this.playerId ? '#ff6b6b' : '#ffd76b'
+                    ));
+                }
+                if (targetId === this.playerId) {
+                    if (window.gameSound) (isKill ? window.gameSound.death() : window.gameSound.hurt());
+                    this.addShake(isKill ? 9 : 5);
+                    this.triggerFlash('#e03131', isKill ? 0.30 : 0.16);
+                } else if (shooterId === this.playerId) {
+                    if (window.gameSound) (isKill ? window.gameSound.kill() : window.gameSound.hitConfirm());
+                    if (isKill) {
+                        this.addShake(4);
+                        this.triggerFlash('#ffffff', 0.12);
+                    }
+                } else if (targetPlayer && window.gameSound) {
+                    window.gameSound.wallHit(this.volFor(targetPlayer.x, targetPlayer.y) * 0.5);
                 }
                 return;
             }
@@ -1112,6 +1180,7 @@ class GameClient {
                 const y = decoder.readFloat32();
                 const bulletId = decoder.readString();
                 this.effects.push(new Effect(x, y, 'wallHit'));
+                if (window.gameSound) window.gameSound.wallHit(this.volFor(x, y));
                 return;
             }
 
@@ -1125,6 +1194,7 @@ class GameClient {
                 if (p) {
                     p.x = x; p.y = y; p.health = health; p.isAlive = true;
                 }
+                if (playerId === this.playerId && window.gameSound) window.gameSound.respawn();
                 return;
             }
 
@@ -1145,8 +1215,14 @@ class GameClient {
                 const typeId = decoder.readUint8();
                 const type = this.getPowerupTypeById(typeId);
                 this.powerups = this.powerups.filter(p => p.id !== powerupId);
+                if (playerId === this.playerId && window.gameSound) window.gameSound.pickup();
                 const pickedUpPlayer = this.players.get(playerId);
                 if (pickedUpPlayer) {
+                    if (type === 'heal') {
+                        this.damageNumbers.push(new DamageNumber(
+                            pickedUpPlayer.x + 10, pickedUpPlayer.y - 8, '+HP', '#5dde9a'
+                        ));
+                    }
                     this.effects.push(new Effect(pickedUpPlayer.x + 10, pickedUpPlayer.y + 10, 'powerup'));
                     // 本地立即设置buff，保证UI立刻显示
                     const now = Date.now();
@@ -1207,15 +1283,15 @@ class GameClient {
     getPowerupVisual(type) {
         switch (type) {
             case 'shield':
-                return { color: '#9b59b6', icon: '🛡️' };
+                return { color: '#a78bfa', icon: '◆' };
             case 'rapid_fire':
             case 'rapidFire':
-                return { color: '#e67e22', icon: '⚡' };
+                return { color: '#fbbf24', icon: '▲' };
             case 'damage_boost':
             case 'damageBoost':
-                return { color: '#e74c3c', icon: '🔥' };
+                return { color: '#f87171', icon: '●' };
             case 'heal':
-                return { color: '#2ecc71', icon: '✚' };
+                return { color: '#34d399', icon: '+' };
             default:
                 return { color: '#95a5a6', icon: '?' };
         }
@@ -1232,10 +1308,10 @@ class GameClient {
                     const lockWindow = 160; // ms 内视为仍在推墙
                     const locked = (axis) => localPlayer[`blockMove${axis}`] && (Date.now() - (localPlayer.blockMoveAt || 0) < lockWindow);
                     if (typeof serverPlayer.x === 'number') {
-                        localPlayer.x = locked('X') ? serverPlayer.x : (localPlayer.x + (serverPlayer.x - localPlayer.x) * factorSelf);
+                        localPlayer.x = locked('X') ? serverPlayer.x : this.correctSelfAxis(localPlayer.x, serverPlayer.x);
                     }
                     if (typeof serverPlayer.y === 'number') {
-                        localPlayer.y = locked('Y') ? serverPlayer.y : (localPlayer.y + (serverPlayer.y - localPlayer.y) * factorSelf);
+                        localPlayer.y = locked('Y') ? serverPlayer.y : this.correctSelfAxis(localPlayer.y, serverPlayer.y);
                     }
                 } else {
                     // 他人：只更新目标与服务器速度估计，具体位置交给按帧平滑
@@ -1316,6 +1392,12 @@ class GameClient {
     }
 
     handleIncrementalUpdate(message) {
+        // 自愈：游戏已在进行但结算/开局弹窗还挂着
+        if (message.isGameEnded === false) {
+            this.hideGameEndModal();
+            this.hideNewGameModal();
+        }
+
         // 处理新玩家
         if (message.newPlayers) {
             message.newPlayers.forEach(player => {
@@ -1411,9 +1493,9 @@ class GameClient {
             
             // 时间不足30秒时变红色
             if (seconds <= 30) {
-                timerElement.style.color = '#e74c3c';
+                timerElement.style.color = '#f87171';
             } else {
-                timerElement.style.color = '#3498db';
+                timerElement.style.color = '#38bdf8';
             }
         }
     }
@@ -1435,12 +1517,10 @@ class GameClient {
         killNotification.className = 'kill-notification';
         killNotification.dataset.killId = killInfo.timestamp.toString();
         
-        // 根据武器类型选择图标和颜色
-        const weaponIcon = killInfo.weapon === '近战' ? '⚔️' : '🔫';
-        const weaponColor = killInfo.weapon === '近战' ? '#e74c3c' : '#f39c12';
+        // 根据武器类型选择强调色
+        const weaponColor = killInfo.weapon === '近战' ? '#f87171' : '#fbbf24';
         
         killNotification.innerHTML = `
-            <span class="kill-icon">${weaponIcon}</span>
             <span class="killer">${killInfo.killer}</span>
             <span class="weapon" style="color: ${weaponColor}">${killInfo.weapon}</span>
             <span class="victim">${killInfo.victim}</span>
@@ -1592,6 +1672,26 @@ class GameClient {
         const attacker = this.players.get(message.attackerId);
         if (!attacker) return;
 
+        if (window.gameSound) window.gameSound.melee(this.volFor(message.x, message.y));
+        if (message.targetId && message.damage > 0) {
+            const meleeTarget = this.players.get(message.targetId);
+            if (meleeTarget) {
+                this.damageNumbers.push(new DamageNumber(
+                    meleeTarget.x + 10, meleeTarget.y - 8, '-' + message.damage,
+                    message.targetId === this.playerId ? '#ff6b6b' : '#ffd76b'
+                ));
+            }
+        }
+        if (message.targetId === this.playerId && message.damage > 0) {
+            if (window.gameSound) (message.isKill ? window.gameSound.death() : window.gameSound.hurt());
+            this.addShake(message.isKill ? 9 : 6);
+            this.triggerFlash('#e03131', message.isKill ? 0.30 : 0.18);
+        } else if (message.attackerId === this.playerId && message.isKill) {
+            if (window.gameSound) window.gameSound.kill();
+            this.addShake(4);
+            this.triggerFlash('#ffffff', 0.12);
+        }
+
         // 添加刀挥动效果
         this.knifeSwingEffects.push(new KnifeSwingEffect(
             attacker.x, attacker.y, 
@@ -1699,30 +1799,26 @@ class GameClient {
         const targetFrameTime = 1000 / 60; // 60fps
         
         const gameLoop = (timestamp) => {
-            const deltaTime = timestamp - lastFrameTime;
-            
-            // 限制最大帧率，确保所有设备的游戏逻辑保持一致
-            if (deltaTime >= targetFrameTime) {
-                this.update(timestamp);
-                this.render();
-                lastFrameTime = timestamp;
+            // rAF 已与显示器刷新率同步，直接每帧更新渲染（门控会导致周期性跳帧）
+            this.update(timestamp);
+            this.render();
+            lastFrameTime = timestamp;
 
-                // 统计FPS与上下行速率
-                const nowPerf = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-                this.frames++;
-                if (nowPerf - this.lastFpsTime >= 1000) {
-                    const fpsInterval = nowPerf - this.lastFpsTime;
-                    this.fps = Math.round(this.frames * 1000 / fpsInterval);
-                    this.frames = 0;
-                    this.lastFpsTime = nowPerf;
+            // 统计FPS与上下行速率
+            const nowPerf = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+            this.frames++;
+            if (nowPerf - this.lastFpsTime >= 1000) {
+                const fpsInterval = nowPerf - this.lastFpsTime;
+                this.fps = Math.round(this.frames * 1000 / fpsInterval);
+                this.frames = 0;
+                this.lastFpsTime = nowPerf;
 
-                    const rateIntervalSec = Math.max(0.001, (nowPerf - this.lastRateTime) / 1000);
-                    this.downRate = Math.round(this.msgsDownCount / rateIntervalSec);
-                    this.upRate = Math.round(this.msgsUpCount / rateIntervalSec);
-                    this.msgsDownCount = 0;
-                    this.msgsUpCount = 0;
-                    this.lastRateTime = nowPerf;
-                }
+                const rateIntervalSec = Math.max(0.001, (nowPerf - this.lastRateTime) / 1000);
+                this.downRate = Math.round(this.msgsDownCount / rateIntervalSec);
+                this.upRate = Math.round(this.msgsUpCount / rateIntervalSec);
+                this.msgsDownCount = 0;
+                this.msgsUpCount = 0;
+                this.lastRateTime = nowPerf;
             }
             
             requestAnimationFrame(gameLoop);
@@ -1802,6 +1898,12 @@ class GameClient {
         this.knifeSwingEffects = this.knifeSwingEffects.filter(effect => {
             effect.update();
             return !effect.isDead();
+        });
+
+        // 更新伤害飘字
+        this.damageNumbers = this.damageNumbers.filter(d => {
+            d.update();
+            return !d.isDead();
         });
         
         // 更新UI
@@ -1904,6 +2006,16 @@ class GameClient {
         }
     }
 
+    // 自身位置纠偏：带死区，避免服务器量化回包造成的抖动/拉扯
+    correctSelfAxis(cv, nv) {
+        if (cv === undefined || cv === null) return nv;
+        const d = nv - cv;
+        const ad = Math.abs(d);
+        if (ad > 32) return nv;          // 偏差过大（被墙挡/被修正），直接对齐
+        if (ad > 3) return cv + d * 0.3; // 温和纠偏
+        return cv;                        // 量化噪声，忽略
+    }
+
     // 本地AABB碰撞检测（客户端侧，使用服务端下发的terrain）
     checkTerrainCollisionClient(x, y, w, h) {
         if (!this.terrain || this.terrain.length === 0) return false;
@@ -1936,6 +2048,8 @@ class GameClient {
         
         // 添加射击特效
         this.effects.push(new Effect(player.x + 10, player.y + 10, 'shoot'));
+        if (window.gameSound) window.gameSound.shoot(1);
+        this.addShake(1.5);
         
         const enc = new BinaryEncoder().init(24);
         enc.writeUint8(MESSAGE_TYPES.SHOOT);
@@ -2008,7 +2122,7 @@ class GameClient {
         }
         const rateEl = document.getElementById('rateDisplay');
         if (rateEl) {
-            rateEl.textContent = `⬇︎ ${this.downRate || 0} pkt/s | ⬆︎ ${this.upRate || 0} pkt/s`;
+            rateEl.textContent = `↓ ${this.downRate || 0} pkt/s · ↑ ${this.upRate || 0} pkt/s`;
         }
         const pingEl = document.getElementById('pingDisplay');
         const qualityEl = document.getElementById('networkQuality');
@@ -2048,30 +2162,152 @@ class GameClient {
         }
     }
 
+    // 屏幕震动（叠加，帧间衰减）
+    addShake(mag) {
+        this.shakeMag = Math.min(14, (this.shakeMag || 0) + mag);
+    }
+
+    // 全屏闪光（击杀/受击反馈）
+    triggerFlash(color, alpha) {
+        this.flashColor = color;
+        this.flashAlpha = Math.max(this.flashAlpha || 0, alpha);
+    }
+
+    // 按与本机玩家的距离衰减音量
+    volFor(x, y) {
+        const me = this.players.get(this.playerId);
+        if (!me) return 0.5;
+        const d = Math.hypot((x || 0) - me.x, (y || 0) - me.y);
+        return Math.max(0.12, Math.min(1, 1 - d / 1000));
+    }
+
+    // 颜色明暗调整：'#rrggbb' -> rgb()
+    _shade(hex, amt) {
+        if (!hex || hex[0] !== '#' || hex.length !== 7) return hex;
+        const n = parseInt(hex.slice(1), 16);
+        if (isNaN(n)) return hex;
+        const r = Math.max(0, Math.min(255, (n >> 16) + amt));
+        const g = Math.max(0, Math.min(255, ((n >> 8) & 0xff) + amt));
+        const b = Math.max(0, Math.min(255, (n & 0xff) + amt));
+        return `rgb(${r},${g},${b})`;
+    }
+
+    // 2.5D 阴影层：地形斜投影 + 玩家椭圆脚影
+    drawShadowLayer() {
+        const ctx = this.backCtx;
+        ctx.save();
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.30)';
+        this.terrain.forEach(b => {
+            ctx.fillRect(b.x + 5, b.y + b.height - 2, b.width, 7);
+        });
+        const size = this.gameConfig ? this.gameConfig.PLAYER_SIZE : 20;
+        this.players.forEach(p => {
+            if (!p.isAlive) return;
+            ctx.beginPath();
+            ctx.ellipse(p.x + size / 2, p.y + size + 2, size * 0.55, size * 0.24, 0, 0, Math.PI * 2);
+            ctx.fill();
+        });
+        ctx.restore();
+    }
+
+    // 2.5D 地形块：顶面上移 + 侧立面，营造高度感
+    drawTerrainBlock(block) {
+        const ctx = this.backCtx;
+        const H = 12; // 挤出高度
+        let top, side, edge;
+        switch (block.type) {
+            case 'rock':   top = '#55647a'; side = '#333d4d'; edge = '#6b7c94'; break;
+            case 'crate':  top = '#996428'; side = '#5c3a15'; edge = '#b8813c'; break;
+            case 'barrel': top = '#2a3a58'; side = '#182338'; edge = '#3a5078'; break;
+            default:       top = '#26365a'; side = '#151f38'; edge = '#3b5382'; // wall
+        }
+        // 侧立面（下缘可见带）
+        ctx.fillStyle = side;
+        ctx.fillRect(block.x, block.y + block.height - H, block.width, H);
+        // 顶面（整体上移 H）
+        ctx.fillStyle = top;
+        ctx.fillRect(block.x, block.y - H, block.width, block.height);
+        ctx.strokeStyle = edge;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(block.x + 0.5, block.y - H + 0.5, block.width - 1, block.height - 1);
+        // 类型细节（画在顶面坐标系）
+        if (block.type === 'crate') {
+            ctx.strokeStyle = edge;
+            ctx.beginPath();
+            ctx.moveTo(block.x + block.width / 2, block.y - H);
+            ctx.lineTo(block.x + block.width / 2, block.y - H + block.height);
+            ctx.moveTo(block.x, block.y - H + block.height / 2);
+            ctx.lineTo(block.x + block.width, block.y - H + block.height / 2);
+            ctx.stroke();
+        } else if (block.type === 'barrel') {
+            ctx.strokeStyle = '#64748b';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(block.x + block.width / 2, block.y - H + block.height / 2, block.width / 3, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+    }
+
+    // 静态暗角（只生成一次）
+    drawVignette() {
+        if (!this._vignette) {
+            const c = document.createElement('canvas');
+            c.width = this.canvas.width;
+            c.height = this.canvas.height;
+            const vctx = c.getContext('2d');
+            const cx = c.width / 2, cy = c.height / 2;
+            const r = Math.max(c.width, c.height) * 0.72;
+            const g = vctx.createRadialGradient(cx, cy, r * 0.55, cx, cy, r);
+            g.addColorStop(0, 'rgba(0, 0, 0, 0)');
+            g.addColorStop(1, 'rgba(0, 0, 0, 0.34)');
+            vctx.fillStyle = g;
+            vctx.fillRect(0, 0, c.width, c.height);
+            this._vignette = c;
+        }
+        this.backCtx.drawImage(this._vignette, 0, 0);
+    }
+
+    drawDamageNumbers() {
+        this.damageNumbers.forEach(d => d.draw(this.backCtx));
+    }
+
     render() {
         // 清空后台缓冲区
-        this.backCtx.fillStyle = '#2c3e50';
+        this.backCtx.fillStyle = '#0e1626';
         this.backCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
         
+        // 屏幕震动偏移
+        this.shakeMag = (this.shakeMag || 0) * 0.85;
+        if (this.shakeMag < 0.1) this.shakeMag = 0;
+        const shakeX = (Math.random() - 0.5) * 2 * this.shakeMag;
+        const shakeY = (Math.random() - 0.5) * 2 * this.shakeMag;
+
+        this.backCtx.save();
+        this.backCtx.translate(shakeX, shakeY);
+
         // 绘制网格背景
         this.drawGrid();
-        
-        // 绘制地形
-        this.drawTerrain();
-        
-        // 绘制玩家
-        this.players.forEach(player => {
-            this.drawPlayer(player);
+
+        // 2.5D 阴影层
+        this.drawShadowLayer();
+
+        // 画家算法：地形/道具/玩家按底边 y 排序绘制，获得正确前后遮挡
+        const psize = this.gameConfig ? this.gameConfig.PLAYER_SIZE : 20;
+        const usize = this.gameConfig ? this.gameConfig.POWERUP_SIZE : 15;
+        const drawList = [];
+        this.terrain.forEach(b => drawList.push({ y: b.y + b.height, k: 0, o: b }));
+        this.powerups.forEach(p => drawList.push({ y: p.y + usize, k: 1, o: p }));
+        this.players.forEach(p => drawList.push({ y: p.y + psize, k: 2, o: p }));
+        drawList.sort((a, b) => a.y - b.y || a.k - b.k);
+        drawList.forEach(item => {
+            if (item.k === 0) this.drawTerrainBlock(item.o);
+            else if (item.k === 1) this.drawPowerup(item.o);
+            else this.drawPlayer(item.o);
         });
-        
+
         // 绘制子弹
         this.bullets.forEach(bullet => {
             this.drawBullet(bullet);
-        });
-        
-        // 绘制道具
-        this.powerups.forEach(powerup => {
-            this.drawPowerup(powerup);
         });
         
         // 绘制特效
@@ -2086,14 +2322,34 @@ class GameClient {
         this.knifeSwingEffects.forEach(effect => {
             effect.draw(this.backCtx);
         });
-        
+
+        // 伤害飘字
+        this.drawDamageNumbers();
+
+        this.backCtx.restore();
+
+        // 击杀/受击全屏闪光
+        if (this.flashAlpha > 0.01) {
+            this.backCtx.save();
+            this.backCtx.globalAlpha = this.flashAlpha;
+            this.backCtx.fillStyle = this.flashColor;
+            this.backCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            this.backCtx.restore();
+            this.flashAlpha *= 0.86;
+        } else {
+            this.flashAlpha = 0;
+        }
+
+        // 暗角
+        this.drawVignette();
+
         // 将后台缓冲区复制到前台画布 - 双缓冲交换
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this.ctx.drawImage(this.backBuffer, 0, 0);
     }
 
     drawGrid() {
-        this.backCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+        this.backCtx.strokeStyle = 'rgba(148, 163, 184, 0.07)';
         this.backCtx.lineWidth = 1;
         
         const gridSize = 50;
@@ -2112,72 +2368,6 @@ class GameClient {
         }
     }
 
-    drawTerrain() {
-        this.terrain.forEach(block => {
-            this.backCtx.save();
-            
-            // 根据类型设置不同的颜色和样式
-            switch (block.type) {
-                case 'wall':
-                    this.backCtx.fillStyle = '#34495e';
-                    this.backCtx.strokeStyle = '#2c3e50';
-                    break;
-                case 'rock':
-                    this.backCtx.fillStyle = '#7f8c8d';
-                    this.backCtx.strokeStyle = '#5d6d7e';
-                    break;
-                case 'crate':
-                    this.backCtx.fillStyle = '#8b4513';
-                    this.backCtx.strokeStyle = '#654321';
-                    break;
-                case 'barrel':
-                    this.backCtx.fillStyle = '#2c3e50';
-                    this.backCtx.strokeStyle = '#1a252f';
-                    break;
-                default:
-                    this.backCtx.fillStyle = '#34495e';
-                    this.backCtx.strokeStyle = '#2c3e50';
-            }
-            
-            // 绘制地形块
-            this.backCtx.fillRect(block.x, block.y, block.width, block.height);
-            
-            // 绘制边框
-            this.backCtx.lineWidth = 2;
-            this.backCtx.strokeRect(block.x, block.y, block.width, block.height);
-            
-            // 添加纹理效果
-            this.backCtx.fillStyle = 'rgba(0, 0, 0, 0.2)';
-            for (let i = 0; i < 3; i++) {
-                const x = block.x + Math.random() * block.width;
-                const y = block.y + Math.random() * block.height;
-                this.backCtx.fillRect(x, y, 2, 2);
-            }
-            
-            // 为特定类型添加特殊效果
-            if (block.type === 'crate') {
-                // 木箱纹理
-                this.backCtx.strokeStyle = '#654321';
-                this.backCtx.lineWidth = 1;
-                this.backCtx.beginPath();
-                this.backCtx.moveTo(block.x + block.width/2, block.y);
-                this.backCtx.lineTo(block.x + block.width/2, block.y + block.height);
-                this.backCtx.moveTo(block.x, block.y + block.height/2);
-                this.backCtx.lineTo(block.x + block.width, block.y + block.height/2);
-                this.backCtx.stroke();
-            } else if (block.type === 'barrel') {
-                // 桶的金属环
-                this.backCtx.strokeStyle = '#95a5a6';
-                this.backCtx.lineWidth = 2;
-                this.backCtx.beginPath();
-                this.backCtx.arc(block.x + block.width/2, block.y + block.height/2, block.width/3, 0, Math.PI * 2);
-                this.backCtx.stroke();
-            }
-            
-            this.backCtx.restore();
-        });
-    }
-
     drawPlayer(player) {
         const size = this.gameConfig ? this.gameConfig.PLAYER_SIZE : 20;
         
@@ -2185,18 +2375,20 @@ class GameClient {
         this.backCtx.translate(player.x + size / 2, player.y + size / 2);
         this.backCtx.rotate(player.angle);
         
-        // 玩家身体
-        if (player.isAlive) {
-            this.backCtx.fillStyle = player.color || '#3498db';
-        } else {
-            this.backCtx.fillStyle = '#95a5a6';
-        }
-        
+        // 玩家身体（受光面/暗面渐变 + 描边，立体感）
+        const bodyColor = player.isAlive ? (player.color || '#3498db') : '#5b6678';
+        const bodyGrad = this.backCtx.createLinearGradient(0, -size / 2, 0, size / 2);
+        bodyGrad.addColorStop(0, this._shade(bodyColor, 42));
+        bodyGrad.addColorStop(1, this._shade(bodyColor, -34));
+        this.backCtx.fillStyle = bodyGrad;
         this.backCtx.fillRect(-size / 2, -size / 2, size, size);
+        this.backCtx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+        this.backCtx.lineWidth = 1.5;
+        this.backCtx.strokeRect(-size / 2, -size / 2, size, size);
         
-        // 玩家方向指示器
-        this.backCtx.fillStyle = '#ffffff';
-        this.backCtx.fillRect(size / 2 - 2, -2, 6, 4);
+        // 枪管方向指示器
+        this.backCtx.fillStyle = '#e8edf5';
+        this.backCtx.fillRect(size / 2 - 2, -2.5, 9, 5);
         
         this.backCtx.restore();
         
@@ -2434,7 +2626,7 @@ class GameClient {
                 activePowerups.push({
                     key: 'shield',
                     name: '护盾',
-                    icon: '🛡️',
+                    icon: '◆',
                     color: '#9b59b6',
                     remainingTime: remainingTime
                 });
@@ -2447,7 +2639,7 @@ class GameClient {
                 activePowerups.push({
                     key: 'rapidFire',
                     name: '快速射击',
-                    icon: '⚡',
+                    icon: '▲',
                     color: '#e67e22',
                     remainingTime: remainingTime
                 });
@@ -2460,7 +2652,7 @@ class GameClient {
                 activePowerups.push({
                     key: 'damageBoost',
                     name: '伤害提升',
-                    icon: '🔥',
+                    icon: '●',
                     color: '#e74c3c',
                     remainingTime: remainingTime
                 });
@@ -2473,7 +2665,7 @@ class GameClient {
                 activePowerups.push({
                     key: 'heal',
                     name: '回血',
-                    icon: '❤️',
+                    icon: '+',
                     color: '#27ae60',
                     remainingTime: remainingTime
                 });
@@ -2593,9 +2785,9 @@ class GameClient {
         if (!player.powerups) return;
         
         const buffTypes = [
-            { key: 'shield', color: '#9b59b6', icon: '🛡️' },
-            { key: 'rapidFire', color: '#e67e22', icon: '⚡' },
-            { key: 'damageBoost', color: '#e74c3c', icon: '🔥' }
+            { key: 'shield', color: '#a78bfa', icon: '◆' },
+            { key: 'rapidFire', color: '#fbbf24', icon: '▲' },
+            { key: 'damageBoost', color: '#f87171', icon: '●' }
         ];
         
         let displayIndex = 0;
