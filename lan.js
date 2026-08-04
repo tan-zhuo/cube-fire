@@ -77,9 +77,17 @@ function waitIceComplete(pc, timeoutMs = 2500) {
     });
 }
 
+// WebRTC 配置：公网部署（如 Vercel 静态托管）时，跨网络直连需要 STUN
+// 获取公网候选地址并写入邀请码/应答码；局域网直连不受影响
+const RTC_CONFIG = {
+    iceServers: [
+        { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }
+    ]
+};
+
 // 房主：生成一份邀请码（每个访客一份）
 async function hostCreateInvite() {
-    const pc = new RTCPeerConnection();
+    const pc = new RTCPeerConnection(RTC_CONFIG);
     const dc = pc.createDataChannel('game');
     await pc.setLocalDescription(await pc.createOffer());
     await waitIceComplete(pc);
@@ -101,7 +109,7 @@ async function guestAcceptInvite(code) {
     if (!payload || payload.t !== 'offer' || !payload.sdp) {
         throw new Error('无效的邀请码');
     }
-    const pc = new RTCPeerConnection();
+    const pc = new RTCPeerConnection(RTC_CONFIG);
     const dcPromise = new Promise(resolve => {
         pc.ondatachannel = e => resolve(e.channel);
     });
@@ -158,7 +166,13 @@ async function copyText(text, btn) {
 function startAsHost() {
     if (!requireNickname()) return;
     isHost = true;
-    window.GameHost.start();
+    // 读取大厅选择的地图与对战模式
+    const mapSelect = $('mapSelect');
+    const teamModeSelect = $('teamModeSelect');
+    window.GameHost.start({
+        mapId: mapSelect ? mapSelect.value : undefined,
+        teamMode: teamModeSelect ? teamModeSelect.value === 'team' : false
+    });
     window.createGameTransport = createLoopbackTransport;
     window.game.joinGame();
     // 显示游戏内"邀请玩家"按钮
@@ -398,6 +412,17 @@ function startLandingFx() {
 document.addEventListener('DOMContentLoaded', () => {
     startLandingFx();
 
+    // 填充地图下拉（地图定义在 host-core.js，保持单一来源）
+    const mapSelect = $('mapSelect');
+    if (mapSelect && window.GameHost && window.GameHost.getMaps) {
+        window.GameHost.getMaps().forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m.id;
+            opt.textContent = m.name;
+            mapSelect.appendChild(opt);
+        });
+    }
+
     // 模式选择
     $('createRoomButton').addEventListener('click', startAsHost);
     $('joinRoomButton').addEventListener('click', () => {
@@ -443,8 +468,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // file:// 打开时没有可连的 WebSocket 服务器，隐藏"连接服务器"入口
-    if (window.location.protocol === 'file:') {
+    // "连接服务器"模式只在由游戏服务器（server.js，端口38080）提供页面时可用；
+    // file:// 直开或静态托管（如 Vercel）没有可连的 WebSocket 服务器，隐藏该入口
+    if (window.location.port !== '38080') {
         $('joinButton').classList.add('hidden');
         const hint = $('serverModeHint');
         if (hint) hint.classList.add('hidden');

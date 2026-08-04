@@ -104,6 +104,57 @@ const GAME_CONFIG = {
     MELEE_COOLDOWN: 1000 // 近战攻击冷却时间1秒
 };
 
+// ===================== 地图注册表 =====================
+// 所有地图均为 1200x800（30x20 格，格宽 TERRAIN_SIZE=40）。
+// buildBlocks(): 返回除四周边界墙外的地形块（边界墙由 generateTerrain 统一追加）。
+// teamZones: 分队模式下两队的出生区域（像素矩形），1=红队(左) 2=蓝队(右)。
+const DEFAULT_TEAM_ZONES = {
+    1: { x: 60, y: 60, w: 300, h: 680 },
+    2: { x: 840, y: 60, w: 300, h: 680 }
+};
+
+const MAPS = {
+    classic: {
+        name: '经典竞技场',
+        buildBlocks: buildClassicBlocks,
+        teamZones: DEFAULT_TEAM_ZONES
+    },
+    fortress: {
+        name: '双子要塞',
+        buildBlocks: buildFortressBlocks,
+        teamZones: {
+            1: { x: 60, y: 60, w: 260, h: 680 },
+            2: { x: 880, y: 60, w: 260, h: 680 }
+        }
+    },
+    maze: {
+        name: '迷宫回廊',
+        buildBlocks: buildMazeBlocks,
+        teamZones: DEFAULT_TEAM_ZONES
+    },
+    crossfire: {
+        name: '十字堡垒',
+        buildBlocks: buildCrossfireBlocks,
+        teamZones: DEFAULT_TEAM_ZONES
+    }
+};
+const DEFAULT_MAP_ID = 'classic';
+
+// 对局配置：启动时可通过环境变量 MAP_ID / TEAM_MODE 指定；/map、/team 聊天命令修改下一局设置
+const matchConfig = {
+    mapId: DEFAULT_MAP_ID,
+    teamMode: false,
+    pendingMapId: null,
+    pendingTeamMode: null
+};
+
+// 队伍配色（1=红队 2=蓝队），同队队员使用不同深浅便于区分个体
+const TEAM_COLORS = {
+    1: ['#e74c3c', '#ff8a75', '#c0392b', '#ff5e3a'],
+    2: ['#3498db', '#7fc4f5', '#2471a8', '#54a0ff']
+};
+const TEAM_NAMES = { 1: '红队', 2: '蓝队' };
+
 // 二进制协议配置
 const MESSAGE_TYPES = {
     // 客户端发送的消息
@@ -204,8 +255,14 @@ function encodeJoined(playerId) {
     const encoder = new BinaryEncoder().init(1024);
     encoder.writeUint8(MESSAGE_TYPES.JOINED);
     encoder.writeUint32(playerId);
-    // 将gameConfig作为字符串传输，便于扩展
-    encoder.writeString(JSON.stringify(GAME_CONFIG));
+    // 将gameConfig作为字符串传输，便于扩展；附带当前对局的地图与模式信息
+    const map = MAPS[matchConfig.mapId] || MAPS[DEFAULT_MAP_ID];
+    encoder.writeString(JSON.stringify({
+        ...GAME_CONFIG,
+        MAP_ID: matchConfig.mapId,
+        MAP_NAME: map.name,
+        TEAM_MODE: matchConfig.teamMode
+    }));
     return encoder.getBuffer();
 }
 
@@ -233,9 +290,10 @@ function encodeIncrementalUpdate(update) {
             enc.writeUint16(Math.min(65535, p.score || 0));
             enc.writeUint8(p.isAlive ? 1 : 0);
             enc.writeString(p.color || '#3498db');
+            enc.writeUint8(p.team || 0);
         });
     }
-    
+
     // 变化玩家（使用bitmask按需写字段）
     if (update.changedPlayers && update.changedPlayers.length > 0) {
         enc.writeUint8(0x02);
@@ -333,6 +391,7 @@ function encodeGameEnd(payload) {
         enc.writeUint16(Math.min(65535, p.score || 0));
         enc.writeUint8(p.isAlive ? 1 : 0);
         enc.writeUint8(Math.max(0, Math.min(100, p.health || 0)));
+        enc.writeUint8(p.team || 0);
     });
     return enc.getBuffer();
 }
@@ -364,6 +423,7 @@ function encodePlayerJoined(player) {
     enc.writeUint16(Math.min(65535, player.score || 0));
     enc.writeUint8(player.isAlive ? 1 : 0);
     enc.writeString(player.color || '#3498db');
+    enc.writeUint8(player.team || 0);
     return enc.getBuffer();
 }
 
@@ -515,10 +575,11 @@ function encodeGameStateUpdate(gameState) {
         encoder.writeUint8(player.health);
         encoder.writeUint16(Math.min(65535, player.score));
         encoder.writeUint8(player.isAlive ? 1 : 0);
-        
-        // 写入颜色（静态）
+
+        // 写入颜色与队伍（静态）
         encoder.writeString(player.color || '#3498db');
-        
+        encoder.writeUint8(player.team || 0);
+
         // 写入道具状态（简单序列化）
         encoder.writeUint8(player.powerups && player.powerups.shield && player.powerups.shield.active ? 1 : 0);
         encoder.writeUint8(player.powerups && player.powerups.rapidFire && player.powerups.rapidFire.active ? 1 : 0);
@@ -583,6 +644,7 @@ function encodeInitialGameState(state) {
         encoder.writeUint16(Math.min(65535, Math.max(0, Math.floor(player.score || 0))));
         encoder.writeUint8(player.isAlive ? 1 : 0);
         encoder.writeString(player.color);
+        encoder.writeUint8(player.team || 0);
         // powerups flags
         encoder.writeUint8(player.powerups.shield.active ? 1 : 0);
         encoder.writeUint8(player.powerups.rapidFire.active ? 1 : 0);
@@ -709,6 +771,60 @@ const PLAYER_COLORS = [
     '#e91e63'  // 粉色
 ];
 
+// ===================== 分队工具 =====================
+function countTeamMembers(team) {
+    let n = 0;
+    gameState.players.forEach(p => { if (p.team === team) n++; });
+    return n;
+}
+
+// 自动均衡：加入人数较少的一队，人数相同进红队
+function pickBalancedTeam() {
+    return countTeamMembers(1) <= countTeamMembers(2) ? 1 : 2;
+}
+
+function applyTeamColor(player) {
+    if (player.team === 1 || player.team === 2) {
+        const palette = TEAM_COLORS[player.team];
+        player.color = palette[(player.id - 1) % palette.length];
+    } else {
+        player.color = PLAYER_COLORS[(player.id - 1) % PLAYER_COLORS.length];
+    }
+}
+
+function isSameTeam(a, b) {
+    return !!(a && b && a.team && b.team && a.team === b.team);
+}
+
+// 统一出生点选择：分队模式在本队出生区内取点，否则全图随机
+function findSpawnPosition(team, selfId) {
+    const size = GAME_CONFIG.PLAYER_SIZE;
+    const map = MAPS[matchConfig.mapId] || MAPS[DEFAULT_MAP_ID];
+    const zone = (matchConfig.teamMode && (team === 1 || team === 2) && map.teamZones) ? map.teamZones[team] : null;
+    const randomPoint = () => zone
+        ? { x: zone.x + Math.random() * (zone.w - size), y: zone.y + Math.random() * (zone.h - size) }
+        : { x: Math.random() * (GAME_CONFIG.CANVAS_WIDTH - size), y: Math.random() * (GAME_CONFIG.CANVAS_HEIGHT - size) };
+
+    // 第一轮：避开地形且与其他存活玩家保持距离
+    for (let i = 0; i < 100; i++) {
+        const p = randomPoint();
+        if (checkTerrainCollision(p.x, p.y, size, size)) continue;
+        let nearOther = false;
+        gameState.players.forEach(other => {
+            if (other.id !== selfId && other.isAlive) {
+                if (Math.hypot(p.x - other.x, p.y - other.y) < size * 2) nearOther = true;
+            }
+        });
+        if (!nearOther) return p;
+    }
+    // 第二轮：只避开地形
+    for (let i = 0; i < 50; i++) {
+        const p = randomPoint();
+        if (!checkTerrainCollision(p.x, p.y, size, size)) return p;
+    }
+    return { x: 60, y: 60 };
+}
+
 // 玩家类
 class Player {
     constructor(id, nickname, x, y) {
@@ -725,7 +841,8 @@ class Player {
         this.shotCooldown = 200; // 射击冷却时间(毫秒)
         this.lastMelee = 0;
         this.meleeCooldown = GAME_CONFIG.MELEE_COOLDOWN; // 近战攻击冷却时间
-        this.color = PLAYER_COLORS[(id - 1) % PLAYER_COLORS.length]; // 根据ID分配颜色
+        this.team = 0; // 0=无队伍（个人混战），1=红队，2=蓝队
+        this.color = PLAYER_COLORS[(id - 1) % PLAYER_COLORS.length]; // 根据ID分配颜色（分队模式下由applyTeamColor覆盖）
         
         // 移动状态跟踪
         this.vx = 0;
@@ -808,44 +925,10 @@ class Player {
     }
 
     respawn() {
-        // 尝试多次找到合适的复活位置
-        let attempts = 0;
-        let validPosition = false;
-        let newX, newY;
-        
-        while (attempts < 50 && !validPosition) {
-            newX = Math.random() * (GAME_CONFIG.CANVAS_WIDTH - GAME_CONFIG.PLAYER_SIZE);
-            newY = Math.random() * (GAME_CONFIG.CANVAS_HEIGHT - GAME_CONFIG.PLAYER_SIZE);
-            
-            // 检查是否与地形碰撞
-            if (!checkTerrainCollision(newX, newY, GAME_CONFIG.PLAYER_SIZE, GAME_CONFIG.PLAYER_SIZE)) {
-                // 检查是否与其他玩家碰撞
-                let playerCollision = false;
-                gameState.players.forEach(player => {
-                    if (player.id !== this.id && player.isAlive) {
-                        const distance = Math.sqrt((newX - player.x) ** 2 + (newY - player.y) ** 2);
-                        if (distance < GAME_CONFIG.PLAYER_SIZE * 2) {
-                            playerCollision = true;
-                        }
-                    }
-                });
-                
-                if (!playerCollision) {
-                    validPosition = true;
-                }
-            }
-            
-            attempts++;
-        }
-        
-        // 如果找不到合适位置，使用默认位置
-        if (!validPosition) {
-            newX = GAME_CONFIG.CANVAS_WIDTH / 2;
-            newY = GAME_CONFIG.CANVAS_HEIGHT / 2;
-        }
-        
-        this.x = newX;
-        this.y = newY;
+        // 统一出生点选择（分队模式回本队出生区复活）
+        const spawn = findSpawnPosition(this.team, this.id);
+        this.x = spawn.x;
+        this.y = spawn.y;
         this.health = GAME_CONFIG.MAX_HEALTH;
         this.isAlive = true;
         this.respawnTime = 0;
@@ -961,10 +1044,10 @@ class Player {
             damage = Math.floor(damage * 1.5);
         }
         
-        // 查找攻击范围内的玩家
+        // 查找攻击范围内的玩家（分队模式下不伤害队友）
         let hitPlayer = null;
         gameState.players.forEach(player => {
-            if (player.id !== this.id && player.isAlive) {
+            if (player.id !== this.id && player.isAlive && !isSameTeam(player, this)) {
                 const playerDx = player.x - this.x;
                 const playerDy = player.y - this.y;
                 const playerDistance = Math.sqrt(playerDx * playerDx + playerDy * playerDy);
@@ -1114,25 +1197,16 @@ const BOT_LIMIT = 8;
 const BOT_NAMES = ['猎手', '疾风', '影子', '磐石', '夜枭', '闪电', '幽灵', '狂狼'];
 const bots = new Map(); // playerId -> 机器人状态
 
-function findBotSpawn() {
-    let x = 60, y = 60;
-    for (let i = 0; i < 100; i++) {
-        const tx = Math.random() * (GAME_CONFIG.CANVAS_WIDTH - GAME_CONFIG.PLAYER_SIZE);
-        const ty = Math.random() * (GAME_CONFIG.CANVAS_HEIGHT - GAME_CONFIG.PLAYER_SIZE);
-        if (!checkTerrainCollision(tx, ty, GAME_CONFIG.PLAYER_SIZE, GAME_CONFIG.PLAYER_SIZE)) {
-            x = tx; y = ty; break;
-        }
-    }
-    return { x, y };
-}
-
 function addBot() {
     if (bots.size >= BOT_LIMIT) return false;
     const playerId = gameState.nextPlayerId++;
-    const spawn = findBotSpawn();
+    const team = matchConfig.teamMode ? pickBalancedTeam() : 0;
+    const spawn = findSpawnPosition(team, playerId);
     const name = 'AI·' + BOT_NAMES[(playerId - 1) % BOT_NAMES.length];
     const player = new Player(playerId, name, spawn.x, spawn.y);
     player.isBot = true;
+    player.team = team;
+    applyTeamColor(player);
     gameState.players.set(playerId, player);
     bots.set(playerId, {
         waypointX: spawn.x,
@@ -1157,6 +1231,7 @@ function addBot() {
             score: player.score,
             isAlive: player.isAlive,
             color: player.color,
+            team: player.team,
             powerups: player.powerups
         }
     });
@@ -1203,10 +1278,10 @@ function botThink(me, bot) {
     const size = GAME_CONFIG.PLAYER_SIZE;
     const cx = me.x + size / 2, cy = me.y + size / 2;
 
-    // 选最近的可见敌人（真人和其他机器人都打）
+    // 选最近的可见敌人（真人和其他机器人都打，分队模式下不打队友）
     let best = null, bestDist = Infinity;
     gameState.players.forEach(p => {
-        if (p.id === me.id || !p.isAlive) return;
+        if (p.id === me.id || !p.isAlive || isSameTeam(p, me)) return;
         const px = p.x + size / 2, py = p.y + size / 2;
         const d = Math.hypot(px - cx, py - cy);
         if (d < bestDist && d < 520 && hasLineOfSight(cx, cy, px, py)) {
@@ -1282,9 +1357,9 @@ function updateBots(now) {
             bot.stuckCheckAt = now;
         }
 
-        // 战斗
+        // 战斗（开火前再校验一次队伍，防止目标中途换队）
         const enemy = bot.enemyId ? gameState.players.get(bot.enemyId) : null;
-        if (enemy && enemy.isAlive) {
+        if (enemy && enemy.isAlive && !isSameTeam(enemy, me)) {
             const ex = enemy.x + size / 2, ey = enemy.y + size / 2;
             const d = Math.hypot(ex - cx, ey - cy);
             me.angle = Math.atan2(ey - cy, ex - cx);
@@ -1761,6 +1836,7 @@ function generateIncrementalUpdate() {
                     score: player.score,
                     isAlive: player.isAlive,
                     color: player.color,
+                    team: player.team || 0,
                     powerups: player.powerups
                 });
             }
@@ -1972,7 +2048,8 @@ function getPlayersList() {
         nickname: player.nickname,
         score: player.score,
         isAlive: player.isAlive,
-        health: player.health
+        health: player.health,
+        team: player.team || 0
     })).sort((a, b) => b.score - a.score);
 }
 
@@ -1988,6 +2065,7 @@ function getPlayersWithBuffs() {
         isAlive: player.isAlive,
         health: player.health,
         color: player.color,
+        team: player.team || 0,
         powerups: player.powerups,
         vx: player.vx || 0,
         vy: player.vy || 0,
@@ -2196,6 +2274,36 @@ function handleMessage(ws, message) {
                     });
                     break;
                 }
+                // 地图指令：/map 查看列表，/map 地图ID 下一局切换
+                if (cmdText.startsWith('/map')) {
+                    const arg = cmdText.slice(4).trim();
+                    let content;
+                    if (arg && MAPS[arg]) {
+                        matchConfig.pendingMapId = arg;
+                        content = `下一局将切换到地图「${MAPS[arg].name}」`;
+                    } else {
+                        const list = Object.keys(MAPS).map(k => `${k}=${MAPS[k].name}`).join('，');
+                        content = `当前地图: ${(MAPS[matchConfig.mapId] || MAPS[DEFAULT_MAP_ID]).name}。可用地图: ${list}。输入 /map 地图ID 下一局切换`;
+                    }
+                    broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, timestamp: Date.now() });
+                    break;
+                }
+                // 分队指令：/team on 开启红蓝对抗，/team off 恢复个人混战
+                if (cmdText.startsWith('/team')) {
+                    const arg = cmdText.slice(5).trim().toLowerCase();
+                    let content;
+                    if (arg === 'on' || arg === '开') {
+                        matchConfig.pendingTeamMode = true;
+                        content = '下一局开启红蓝对抗模式';
+                    } else if (arg === 'off' || arg === '关') {
+                        matchConfig.pendingTeamMode = false;
+                        content = '下一局恢复个人混战模式';
+                    } else {
+                        content = `当前模式: ${matchConfig.teamMode ? '红蓝对抗' : '个人混战'}。输入 /team on 或 /team off 下一局切换`;
+                    }
+                    broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, timestamp: Date.now() });
+                    break;
+                }
                 const chatMessage = {
                     type: 'chatMessage',
                     playerId: chatPlayer.id,
@@ -2262,51 +2370,21 @@ function handleJoin(ws, message) {
     console.log('处理玩家加入请求:', message);
     const { nickname } = message;
     const playerId = gameState.nextPlayerId++;
-    
-    // 为新玩家找一个安全的生成位置
-    let spawnX, spawnY;
-    let spawnAttempts = 0;
-    let validSpawnFound = false;
-    
-    while (spawnAttempts < 100 && !validSpawnFound) {
-        spawnX = Math.random() * (GAME_CONFIG.CANVAS_WIDTH - GAME_CONFIG.PLAYER_SIZE);
-        spawnY = Math.random() * (GAME_CONFIG.CANVAS_HEIGHT - GAME_CONFIG.PLAYER_SIZE);
-        
-        // 检查是否与地形碰撞
-        if (!checkTerrainCollision(spawnX, spawnY, GAME_CONFIG.PLAYER_SIZE, GAME_CONFIG.PLAYER_SIZE)) {
-            // 检查是否与其他玩家距离过近
-            let tooCloseToOthers = false;
-            gameState.players.forEach(existingPlayer => {
-                if (existingPlayer.isAlive) {
-                    const distance = Math.sqrt((spawnX - existingPlayer.x) ** 2 + (spawnY - existingPlayer.y) ** 2);
-                    if (distance < GAME_CONFIG.PLAYER_SIZE * 3) {
-                        tooCloseToOthers = true;
-                    }
-                }
-            });
-            
-            if (!tooCloseToOthers) {
-                validSpawnFound = true;
-            }
-        }
-        
-        spawnAttempts++;
-    }
-    
-    // 如果找不到合适位置，使用默认的安全位置
-    if (!validSpawnFound) {
-        spawnX = 50;
-        spawnY = 50;
-    }
-    
+
+    // 分队模式自动均衡分队，并在本队出生区找生成位置
+    const team = matchConfig.teamMode ? pickBalancedTeam() : 0;
+    const spawn = findSpawnPosition(team, playerId);
+
     // 创建玩家
     const player = new Player(
         playerId,
         nickname,
-        spawnX,
-        spawnY
+        spawn.x,
+        spawn.y
     );
-    
+    player.team = team;
+    applyTeamColor(player);
+
     gameState.players.set(playerId, player);
     ws.playerId = playerId;
     
@@ -2330,6 +2408,7 @@ function handleJoin(ws, message) {
             score: player.score,
             isAlive: player.isAlive,
             color: player.color,
+            team: player.team,
             powerups: player.powerups
         }
     }, playerId);
@@ -2449,26 +2528,39 @@ function checkTerrainCollision(x, y, width, height) {
     return false;
 }
 
-// 生成地形
-function generateTerrain() {
-    const terrain = [];
+// ===================== 地图构建 =====================
+// 网格坐标转地形块（gx, gy 为 40px 格坐标，画布共 30x20 格）
+function gridBlock(gx, gy, type) {
     const size = GAME_CONFIG.TERRAIN_SIZE;
-    
-    // 地形类型
+    return { x: gx * size, y: gy * size, width: size, height: size, type };
+}
+
+// 横排 / 竖排结构，skip 为要留出的缺口格坐标
+function gridRow(blocks, gy, gx1, gx2, type, skip = []) {
+    for (let gx = gx1; gx <= gx2; gx++) {
+        if (!skip.includes(gx)) blocks.push(gridBlock(gx, gy, type));
+    }
+}
+function gridCol(blocks, gx, gy1, gy2, type, skip = []) {
+    for (let gy = gy1; gy <= gy2; gy++) {
+        if (!skip.includes(gy)) blocks.push(gridBlock(gx, gy, type));
+    }
+}
+
+// 经典竞技场：随机散块 + 固定L/T结构（原版地图）
+function buildClassicBlocks() {
+    const blocks = [];
+    const size = GAME_CONFIG.TERRAIN_SIZE;
     const terrainTypes = ['wall', 'rock', 'crate', 'barrel'];
-    
-    // 生成一些随机的地形块
+
     for (let i = 0; i < 20; i++) {
         const x = Math.random() * (GAME_CONFIG.CANVAS_WIDTH - size);
         const y = Math.random() * (GAME_CONFIG.CANVAS_HEIGHT - size);
-        
         // 确保地形不会生成在边缘
-        if (x > 50 && x < GAME_CONFIG.CANVAS_WIDTH - 50 && 
+        if (x > 50 && x < GAME_CONFIG.CANVAS_WIDTH - 50 &&
             y > 50 && y < GAME_CONFIG.CANVAS_HEIGHT - 50) {
-            
             const type = terrainTypes[Math.floor(Math.random() * terrainTypes.length)];
-            terrain.push({
-                id: i,
+            blocks.push({
                 x: Math.floor(x / size) * size,
                 y: Math.floor(y / size) * size,
                 width: size,
@@ -2477,89 +2569,137 @@ function generateTerrain() {
             });
         }
     }
-    
-    // 添加一些L形和T形结构
+
+    // L形和T形结构
     const complexStructures = [
-        // L形结构1
         { x: 200, y: 200, pattern: 'L1' },
         { x: 800, y: 300, pattern: 'L2' },
         { x: 400, y: 500, pattern: 'T1' },
         { x: 900, y: 600, pattern: 'T2' }
     ];
-    
-    complexStructures.forEach((structure, index) => {
-        const baseId = 100 + index * 10;
+    complexStructures.forEach(structure => {
         switch (structure.pattern) {
-            case 'L1':
-                // L形 (左下)
-                terrain.push({ id: baseId, x: structure.x, y: structure.y, width: size, height: size, type: 'wall' });
-                terrain.push({ id: baseId + 1, x: structure.x, y: structure.y + size, width: size, height: size, type: 'wall' });
-                terrain.push({ id: baseId + 2, x: structure.x + size, y: structure.y + size, width: size, height: size, type: 'wall' });
+            case 'L1': // L形 (左下)
+                blocks.push({ x: structure.x, y: structure.y, width: size, height: size, type: 'wall' });
+                blocks.push({ x: structure.x, y: structure.y + size, width: size, height: size, type: 'wall' });
+                blocks.push({ x: structure.x + size, y: structure.y + size, width: size, height: size, type: 'wall' });
                 break;
-            case 'L2':
-                // L形 (右上)
-                terrain.push({ id: baseId, x: structure.x, y: structure.y, width: size, height: size, type: 'wall' });
-                terrain.push({ id: baseId + 1, x: structure.x + size, y: structure.y, width: size, height: size, type: 'wall' });
-                terrain.push({ id: baseId + 2, x: structure.x + size, y: structure.y + size, width: size, height: size, type: 'wall' });
+            case 'L2': // L形 (右上)
+                blocks.push({ x: structure.x, y: structure.y, width: size, height: size, type: 'wall' });
+                blocks.push({ x: structure.x + size, y: structure.y, width: size, height: size, type: 'wall' });
+                blocks.push({ x: structure.x + size, y: structure.y + size, width: size, height: size, type: 'wall' });
                 break;
-            case 'T1':
-                // T形
-                terrain.push({ id: baseId, x: structure.x, y: structure.y, width: size, height: size, type: 'wall' });
-                terrain.push({ id: baseId + 1, x: structure.x - size, y: structure.y, width: size, height: size, type: 'wall' });
-                terrain.push({ id: baseId + 2, x: structure.x + size, y: structure.y, width: size, height: size, type: 'wall' });
-                terrain.push({ id: baseId + 3, x: structure.x, y: structure.y + size, width: size, height: size, type: 'wall' });
+            case 'T1': // T形
+                blocks.push({ x: structure.x, y: structure.y, width: size, height: size, type: 'wall' });
+                blocks.push({ x: structure.x - size, y: structure.y, width: size, height: size, type: 'wall' });
+                blocks.push({ x: structure.x + size, y: structure.y, width: size, height: size, type: 'wall' });
+                blocks.push({ x: structure.x, y: structure.y + size, width: size, height: size, type: 'wall' });
                 break;
-            case 'T2':
-                // 倒T形
-                terrain.push({ id: baseId, x: structure.x, y: structure.y, width: size, height: size, type: 'wall' });
-                terrain.push({ id: baseId + 1, x: structure.x, y: structure.y - size, width: size, height: size, type: 'wall' });
-                terrain.push({ id: baseId + 2, x: structure.x - size, y: structure.y, width: size, height: size, type: 'wall' });
-                terrain.push({ id: baseId + 3, x: structure.x + size, y: structure.y, width: size, height: size, type: 'wall' });
+            case 'T2': // 倒T形
+                blocks.push({ x: structure.x, y: structure.y, width: size, height: size, type: 'wall' });
+                blocks.push({ x: structure.x, y: structure.y - size, width: size, height: size, type: 'wall' });
+                blocks.push({ x: structure.x - size, y: structure.y, width: size, height: size, type: 'wall' });
+                blocks.push({ x: structure.x + size, y: structure.y, width: size, height: size, type: 'wall' });
                 break;
         }
     });
-    
-    // 添加一些边界墙
-    // 顶部和底部
+    return blocks;
+}
+
+// 双子要塞：中线双层城墙留上下两个突破口，两侧对称要塞掩体（为红蓝对抗设计）
+function buildFortressBlocks() {
+    const b = [];
+    // 中线城墙（两列厚），上下两个突破口
+    gridCol(b, 14, 1, 18, 'wall', [4, 5, 14, 15]);
+    gridCol(b, 15, 1, 18, 'wall', [4, 5, 14, 15]);
+    // 两侧基地掩体（左右镜像）
+    gridCol(b, 6, 6, 8, 'crate');
+    gridCol(b, 23, 6, 8, 'crate');
+    gridCol(b, 6, 11, 13, 'crate');
+    gridCol(b, 23, 11, 13, 'crate');
+    // 突破口前的岩石掩体
+    gridRow(b, 3, 10, 11, 'rock');
+    gridRow(b, 3, 18, 19, 'rock');
+    gridRow(b, 16, 10, 11, 'rock');
+    gridRow(b, 16, 18, 19, 'rock');
+    // 散布油桶
+    [[4, 3], [25, 3], [4, 16], [25, 16], [10, 9], [19, 10]].forEach(([gx, gy]) => {
+        b.push(gridBlock(gx, gy, 'barrel'));
+    });
+    return b;
+}
+
+// 迷宫回廊：多重走廊与房间，中央长廊留缺口
+function buildMazeBlocks() {
+    const b = [];
+    // 上下两条横向长墙（各留两个门）
+    gridRow(b, 4, 3, 12, 'wall', [7, 8]);
+    gridRow(b, 4, 17, 26, 'wall', [21, 22]);
+    gridRow(b, 15, 3, 12, 'wall', [7, 8]);
+    gridRow(b, 15, 17, 26, 'wall', [21, 22]);
+    // 中央双层岩石长廊（中间留大缺口）
+    gridRow(b, 9, 10, 19, 'rock', [14, 15]);
+    gridRow(b, 10, 10, 19, 'rock', [14, 15]);
+    // 纵向隔断
+    gridCol(b, 7, 7, 12, 'wall', [9, 10]);
+    gridCol(b, 22, 7, 12, 'wall', [9, 10]);
+    // 木箱与油桶点缀
+    [[4, 9], [4, 10], [25, 9], [25, 10], [14, 2], [15, 2], [14, 17], [15, 17]].forEach(([gx, gy]) => {
+        b.push(gridBlock(gx, gy, 'crate'));
+    });
+    [[10, 6], [19, 6], [10, 13], [19, 13]].forEach(([gx, gy]) => {
+        b.push(gridBlock(gx, gy, 'barrel'));
+    });
+    return b;
+}
+
+// 十字堡垒：中央十字要塞 + 四角L形碉堡，全对称
+function buildCrossfireBlocks() {
+    const b = [];
+    // 中央十字（岩石）
+    gridCol(b, 14, 6, 13, 'rock');
+    gridCol(b, 15, 6, 13, 'rock');
+    gridRow(b, 9, 11, 18, 'rock', [14, 15]);
+    gridRow(b, 10, 11, 18, 'rock', [14, 15]);
+    // 四角L形碉堡（木箱）
+    gridRow(b, 4, 4, 6, 'crate');
+    gridCol(b, 4, 5, 6, 'crate');
+    gridRow(b, 4, 23, 25, 'crate');
+    gridCol(b, 25, 5, 6, 'crate');
+    gridRow(b, 15, 4, 6, 'crate');
+    gridCol(b, 4, 13, 14, 'crate');
+    gridRow(b, 15, 23, 25, 'crate');
+    gridCol(b, 25, 13, 14, 'crate');
+    // 上下通道隔墙
+    gridCol(b, 9, 2, 3, 'wall');
+    gridCol(b, 20, 2, 3, 'wall');
+    gridCol(b, 9, 16, 17, 'wall');
+    gridCol(b, 20, 16, 17, 'wall');
+    // 油桶
+    [[12, 4], [17, 4], [12, 15], [17, 15]].forEach(([gx, gy]) => {
+        b.push(gridBlock(gx, gy, 'barrel'));
+    });
+    return b;
+}
+
+// 生成地形（按地图ID）
+function generateTerrain(mapId) {
+    const map = MAPS[mapId] || MAPS[DEFAULT_MAP_ID];
+    const size = GAME_CONFIG.TERRAIN_SIZE;
+    const terrain = map.buildBlocks();
+
+    // 四周边界墙（所有地图共用）
     for (let x = 0; x < GAME_CONFIG.CANVAS_WIDTH; x += size) {
-        terrain.push({
-            id: terrain.length,
-            x: x,
-            y: 0,
-            width: size,
-            height: size,
-            type: 'wall'
-        });
-        terrain.push({
-            id: terrain.length,
-            x: x,
-            y: GAME_CONFIG.CANVAS_HEIGHT - size,
-            width: size,
-            height: size,
-            type: 'wall'
-        });
+        terrain.push({ x: x, y: 0, width: size, height: size, type: 'wall' });
+        terrain.push({ x: x, y: GAME_CONFIG.CANVAS_HEIGHT - size, width: size, height: size, type: 'wall' });
     }
-    
-    // 左侧和右侧
-    for (let y = 0; y < GAME_CONFIG.CANVAS_HEIGHT; y += size) {
-        terrain.push({
-            id: terrain.length,
-            x: 0,
-            y: y,
-            width: size,
-            height: size,
-            type: 'wall'
-        });
-        terrain.push({
-            id: terrain.length,
-            x: GAME_CONFIG.CANVAS_WIDTH - size,
-            y: y,
-            width: size,
-            height: size,
-            type: 'wall'
-        });
+    for (let y = size; y < GAME_CONFIG.CANVAS_HEIGHT - size; y += size) {
+        terrain.push({ x: 0, y: y, width: size, height: size, type: 'wall' });
+        terrain.push({ x: GAME_CONFIG.CANVAS_WIDTH - size, y: y, width: size, height: size, type: 'wall' });
     }
-    
+
+    // 统一分配ID，避免随机块与边界墙撞号
+    terrain.forEach((t, i) => { t.id = i; });
     return terrain;
 }
 
@@ -2720,12 +2860,12 @@ function processBulletCollisions(bullet) {
         return false; // 移除子弹
     }
     
-    // 检查玩家碰撞
+    // 检查玩家碰撞（分队模式下子弹穿过队友，不造成伤害）
     let bulletHitPlayer = false;
     const shooter = gameState.players.get(bullet.ownerId);
-    
+
     gameState.players.forEach(player => {
-        if (player.id !== bullet.ownerId && player.isAlive) {
+        if (player.id !== bullet.ownerId && player.isAlive && !isSameTeam(player, shooter)) {
             const dx = bullet.x - (player.x + GAME_CONFIG.PLAYER_SIZE / 2);
             const dy = bullet.y - (player.y + GAME_CONFIG.PLAYER_SIZE / 2);
             const distance = Math.sqrt(dx * dx + dy * dy);
@@ -2786,7 +2926,19 @@ function endGame() {
     
     // 获取最终排行榜
     const finalPlayers = getPlayersList();
-    
+
+    // 分队模式：播报团队胜负
+    if (matchConfig.teamMode) {
+        const totals = { 1: 0, 2: 0 };
+        gameState.players.forEach(p => {
+            if (p.team === 1 || p.team === 2) totals[p.team] += p.score || 0;
+        });
+        const content = totals[1] === totals[2]
+            ? `本局平局！红队 ${totals[1]} : ${totals[2]} 蓝队`
+            : `${TEAM_NAMES[totals[1] > totals[2] ? 1 : 2]}获胜！红队 ${totals[1]} : ${totals[2]} 蓝队`;
+        broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, timestamp: Date.now() });
+    }
+
     // 广播游戏结束
     broadcast({
         type: 'gameEnd',
@@ -2805,7 +2957,38 @@ function resetGameState() {
     gameState.isGameEnded = false;
     gameState.showingResults = false;
     gameState.countdown = 0;
-    
+
+    // 应用下一局的地图/模式变更（由 /map、/team 指令设定）
+    let mapChanged = false;
+    if (matchConfig.pendingMapId && MAPS[matchConfig.pendingMapId]) {
+        if (matchConfig.pendingMapId !== matchConfig.mapId) {
+            matchConfig.mapId = matchConfig.pendingMapId;
+            mapChanged = true;
+        }
+    }
+    matchConfig.pendingMapId = null;
+    if (matchConfig.pendingTeamMode !== null) {
+        matchConfig.teamMode = matchConfig.pendingTeamMode;
+        matchConfig.pendingTeamMode = null;
+    }
+    if (mapChanged) {
+        gameState.terrain = generateTerrain(matchConfig.mapId);
+        console.log(`地图切换为 ${MAPS[matchConfig.mapId].name}，生成 ${gameState.terrain.length} 个地形块`);
+    }
+
+    // 分队维护：开启分队时给没有队伍的玩家均衡补队，关闭时清空队伍并恢复个人配色
+    gameState.players.forEach(player => {
+        if (matchConfig.teamMode) {
+            if (player.team !== 1 && player.team !== 2) {
+                player.team = pickBalancedTeam();
+                applyTeamColor(player);
+            }
+        } else if (player.team) {
+            player.team = 0;
+            applyTeamColor(player);
+        }
+    });
+
     // 重置所有玩家
     gameState.players.forEach(player => {
         player.health = GAME_CONFIG.MAX_HEALTH;
@@ -3059,8 +3242,17 @@ function startGameSystems() {
     adaptiveGameLoop();
 }
 
+// 启动配置：环境变量 MAP_ID 选择地图，TEAM_MODE=1 开启红蓝对抗（也可游戏内 /map、/team 指令调整）
+if (process.env.MAP_ID && MAPS[process.env.MAP_ID]) {
+    matchConfig.mapId = process.env.MAP_ID;
+}
+if (process.env.TEAM_MODE === '1' || (process.env.TEAM_MODE || '').toLowerCase() === 'true') {
+    matchConfig.teamMode = true;
+}
+console.log(`对局配置：地图=${MAPS[matchConfig.mapId].name}，模式=${matchConfig.teamMode ? '红蓝对抗' : '个人混战'}`);
+
 // 初始化地形
-gameState.terrain = generateTerrain();
+gameState.terrain = generateTerrain(matchConfig.mapId);
 console.log(`地形初始化完成，生成了 ${gameState.terrain.length} 个地形块`);
 
 // 启动游戏系统

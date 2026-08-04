@@ -1387,6 +1387,86 @@
                 gap: 12px;
             }
         }
+        /* ===== 房主对局选项（地图 / 模式） ===== */
+        #hostOptions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px 14px;
+            margin: 14px 0 4px;
+            padding: 12px 14px;
+            background: rgba(13, 22, 38, 0.55);
+            border: 1px solid rgba(125, 211, 252, 0.14);
+            border-radius: 12px;
+        }
+        .host-option {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            flex: 1 1 150px;
+        }
+        .host-option select {
+            appearance: none;
+            background: rgba(8, 14, 26, 0.85);
+            color: #e8edf5;
+            border: 1px solid rgba(125, 211, 252, 0.22);
+            border-radius: 8px;
+            padding: 9px 12px;
+            font-size: 14px;
+            outline: none;
+            cursor: pointer;
+        }
+        .host-option select:focus {
+            border-color: rgba(125, 211, 252, 0.55);
+        }
+        .host-option-hint {
+            flex-basis: 100%;
+            margin: 0;
+            font-size: 12px;
+            color: #9aa8bd;
+        }
+
+        /* ===== 分队计分板 ===== */
+        #matchInfo {
+            font-size: 12px;
+            color: #9aa8bd;
+            margin: -4px 0 8px;
+        }
+        #matchInfo:empty { display: none; }
+        .team-score-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 700;
+            font-size: 13px;
+            padding: 5px 8px;
+            margin: 8px 0 4px;
+            background: rgba(255, 255, 255, 0.05);
+            border-left: 3px solid;
+            border-radius: 4px;
+        }
+        .team-score-header:first-child { margin-top: 0; }
+
+        /* ===== 团队结算横幅 ===== */
+        .team-result-banner {
+            text-align: center;
+            padding: 10px 0 14px;
+            margin-bottom: 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .team-result-title {
+            font-size: 26px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            margin-bottom: 6px;
+        }
+        .team-result-score {
+            font-size: 16px;
+            font-weight: 700;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+        }
+        .team-result-vs { color: #9aa8bd; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
 </head>
@@ -1435,6 +1515,7 @@
         <aside id="hudRight">
             <div id="scoreboard" class="hud-panel hidden">
                 <h3>排行榜</h3>
+                <div id="matchInfo"></div>
                 <div id="playersList"></div>
             </div>
 
@@ -1535,6 +1616,21 @@
                 <div id="loginForm">
                     <label class="field-label" for="nicknameInput">玩家昵称</label>
                     <input type="text" id="nicknameInput" placeholder="输入你的昵称，准备开战" maxlength="15">
+
+                    <div id="hostOptions">
+                        <div class="host-option">
+                            <label class="field-label" for="mapSelect">地图</label>
+                            <select id="mapSelect"></select>
+                        </div>
+                        <div class="host-option">
+                            <label class="field-label" for="teamModeSelect">对战模式</label>
+                            <select id="teamModeSelect">
+                                <option value="ffa">个人混战</option>
+                                <option value="team">红蓝对抗</option>
+                            </select>
+                        </div>
+                        <p class="host-option-hint">创建房间时生效；对局中可用 /map、/team 指令调整下一局</p>
+                    </div>
 
                     <div id="modeButtons">
                         <button id="createRoomButton" class="mode-card primary">

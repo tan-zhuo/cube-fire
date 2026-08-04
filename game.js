@@ -774,6 +774,7 @@ class GameClient {
                 }
                 this.playerId = playerId;
                 this.hideLogin();
+                this.updateMatchInfo();
                 this.startGameLoop();
                 return;
             }
@@ -798,6 +799,7 @@ class GameClient {
                     const score = decoder.readUint16();
                     const isAlive = decoder.readUint8() === 1;
                     const color = decoder.readString();
+                    const team = decoder.readUint8();
                     const shieldActive = decoder.readUint8() === 1;
                     const rapidActive = decoder.readUint8() === 1;
                     const damageActive = decoder.readUint8() === 1;
@@ -809,7 +811,7 @@ class GameClient {
                     }
 
                     players.push({
-                        id, nickname, x, y, angle, health, score, isAlive, color,
+                        id, nickname, x, y, angle, health, score, isAlive, color, team,
                         powerups: {
                             shield: { active: shieldActive, endTime: shieldActive ? nowForBuffs + defaultBuffMs : 0 },
                             rapidFire: { active: rapidActive, endTime: rapidActive ? nowForBuffs + defaultBuffMs : 0 },
@@ -927,6 +929,7 @@ class GameClient {
                             const score = decoder.readUint16();
                             const isAlive = decoder.readUint8() === 1;
                             const color = decoder.readString();
+                            const team = decoder.readUint8();
                             const nowTs = Date.now();
                             this.players.set(id, {
                                 id,
@@ -938,6 +941,7 @@ class GameClient {
                                 score,
                                 isAlive,
                                 color,
+                                team,
                                 powerups: { shield: {active:false}, rapidFire:{active:false}, damageBoost:{active:false} },
                                 targetX: x,
                                 targetY: y,
@@ -1072,7 +1076,8 @@ class GameClient {
                     const score = decoder.readUint16();
                     const isAlive = decoder.readUint8() === 1;
                     const health = decoder.readUint8();
-                    players.push({ id, nickname, score, isAlive, health });
+                    const team = decoder.readUint8();
+                    players.push({ id, nickname, score, isAlive, health, team });
                 }
                 if (!this._endSoundPlayed) {
                     this._endSoundPlayed = true;
@@ -1110,6 +1115,7 @@ class GameClient {
                 const score = decoder.readUint16();
                 const isAlive = decoder.readUint8() === 1;
                 const color = decoder.readString();
+                const team = decoder.readUint8();
                 this.players.set(id, {
                     id,
                     nickname,
@@ -1120,6 +1126,7 @@ class GameClient {
                     score,
                     isAlive,
                     color,
+                    team,
                     powerups: { shield: {active:false}, rapidFire:{active:false}, damageBoost:{active:false} }
                 });
                 this.updateScoreboard();
@@ -1337,6 +1344,9 @@ class GameClient {
                 localPlayer.score = serverPlayer.score;
                 localPlayer.health = serverPlayer.health;
                 localPlayer.isAlive = serverPlayer.isAlive;
+                // 队伍与颜色（回合切换分队模式时会变化）
+                if (serverPlayer.team !== undefined) localPlayer.team = serverPlayer.team;
+                if (serverPlayer.color) localPlayer.color = serverPlayer.color;
                 // 合并buff状态，避免全量更新时重置计时
                 const now = Date.now();
                 const defaultBuffMs = (this.gameConfig && this.gameConfig.POWERUP_DURATION) ? this.gameConfig.POWERUP_DURATION : 15000;
@@ -1466,23 +1476,63 @@ class GameClient {
     updateScoreboard() {
         const playersList = document.getElementById('playersList');
         playersList.innerHTML = '';
-        
-        const sortedPlayers = Array.from(this.players.values())
-            .sort((a, b) => b.score - a.score);
-        
-        sortedPlayers.forEach(player => {
+
+        const allPlayers = Array.from(this.players.values());
+        const isTeamGame = allPlayers.some(p => p.team === 1 || p.team === 2);
+
+        const appendPlayerRow = (player) => {
             const playerDiv = document.createElement('div');
             playerDiv.className = 'player-score';
             if (player.id === this.playerId) {
                 playerDiv.classList.add('current-player');
             }
-            
             playerDiv.innerHTML = `
                 <span>${player.nickname}</span>
                 <span>${player.score}</span>
             `;
             playersList.appendChild(playerDiv);
-        });
+        };
+
+        if (isTeamGame) {
+            // 分队计分板：红蓝分组显示，组头显示团队总分
+            [
+                { team: 1, name: '红队', color: '#e74c3c' },
+                { team: 2, name: '蓝队', color: '#3498db' }
+            ].forEach(meta => {
+                const members = allPlayers
+                    .filter(p => p.team === meta.team)
+                    .sort((a, b) => b.score - a.score);
+                const total = members.reduce((sum, p) => sum + (p.score || 0), 0);
+                const header = document.createElement('div');
+                header.className = 'team-score-header';
+                header.style.color = meta.color;
+                header.style.borderLeftColor = meta.color;
+                header.innerHTML = `
+                    <span>${meta.name}</span>
+                    <span>${total}</span>
+                `;
+                playersList.appendChild(header);
+                members.forEach(appendPlayerRow);
+            });
+            // 尚未分队的玩家兜底显示
+            allPlayers
+                .filter(p => p.team !== 1 && p.team !== 2)
+                .sort((a, b) => b.score - a.score)
+                .forEach(appendPlayerRow);
+        } else {
+            allPlayers
+                .sort((a, b) => b.score - a.score)
+                .forEach(appendPlayerRow);
+        }
+    }
+
+    // 更新HUD上的地图/模式信息（来自JOINED的配置）
+    updateMatchInfo() {
+        const el = document.getElementById('matchInfo');
+        if (!el || !this.gameConfig) return;
+        const mapName = this.gameConfig.MAP_NAME || '经典竞技场';
+        const mode = this.gameConfig.TEAM_MODE ? '红蓝对抗' : '个人混战';
+        el.textContent = `${mapName} · ${mode}`;
     }
 
     updateGameTimer(remainingTime) {
@@ -1574,13 +1624,47 @@ class GameClient {
 
         // 显示最终排行榜
         finalScores.innerHTML = '';
+        const isTeamGame = players.some(p => p.team === 1 || p.team === 2);
+
+        // 分队模式：先显示团队胜负横幅
+        if (isTeamGame) {
+            const totals = { 1: 0, 2: 0 };
+            players.forEach(p => {
+                if (p.team === 1 || p.team === 2) totals[p.team] += p.score || 0;
+            });
+            let title, titleColor;
+            if (totals[1] === totals[2]) {
+                title = '平局';
+                titleColor = '#f1c40f';
+            } else if (totals[1] > totals[2]) {
+                title = '红队获胜';
+                titleColor = '#e74c3c';
+            } else {
+                title = '蓝队获胜';
+                titleColor = '#3498db';
+            }
+            const banner = document.createElement('div');
+            banner.className = 'team-result-banner';
+            banner.innerHTML = `
+                <div class="team-result-title" style="color: ${titleColor}">${title}</div>
+                <div class="team-result-score">
+                    <span style="color: #e74c3c">红队 ${totals[1]}</span>
+                    <span class="team-result-vs">:</span>
+                    <span style="color: #3498db">${totals[2]} 蓝队</span>
+                </div>
+            `;
+            finalScores.appendChild(banner);
+        }
+
         const sortedPlayers = players.sort((a, b) => b.score - a.score);
-        
+
         sortedPlayers.forEach((player, index) => {
             const scoreItem = document.createElement('div');
             scoreItem.className = 'score-item';
+            const teamColor = player.team === 1 ? '#e74c3c' : player.team === 2 ? '#3498db' : '';
+            const nameStyle = teamColor ? ` style="color: ${teamColor}"` : '';
             scoreItem.innerHTML = `
-                <span>${index + 1}. ${player.nickname}</span>
+                <span${nameStyle}>${index + 1}. ${player.nickname}</span>
                 <span>${player.score} 分</span>
             `;
             finalScores.appendChild(scoreItem);
@@ -2370,7 +2454,20 @@ class GameClient {
 
     drawPlayer(player) {
         const size = this.gameConfig ? this.gameConfig.PLAYER_SIZE : 20;
-        
+
+        // 队伍标识环（分队模式下在脚底画队伍色椭圆环）
+        if (player.isAlive && (player.team === 1 || player.team === 2)) {
+            const teamAccent = player.team === 1 ? '#e74c3c' : '#3498db';
+            this.backCtx.save();
+            this.backCtx.strokeStyle = teamAccent;
+            this.backCtx.globalAlpha = 0.85;
+            this.backCtx.lineWidth = 2;
+            this.backCtx.beginPath();
+            this.backCtx.ellipse(player.x + size / 2, player.y + size + 3, size * 0.72, size * 0.3, 0, 0, Math.PI * 2);
+            this.backCtx.stroke();
+            this.backCtx.restore();
+        }
+
         this.backCtx.save();
         this.backCtx.translate(player.x + size / 2, player.y + size / 2);
         this.backCtx.rotate(player.angle);
@@ -2407,8 +2504,8 @@ class GameClient {
             this.backCtx.fillRect(player.x, player.y - 15, barWidth * healthPercent, barHeight);
         }
         
-        // 绘制昵称（在血条上方）
-        this.backCtx.fillStyle = '#ffffff';
+        // 绘制昵称（在血条上方，分队模式下按队伍着色）
+        this.backCtx.fillStyle = player.team === 1 ? '#ffb0a3' : player.team === 2 ? '#a8d4f7' : '#ffffff';
         this.backCtx.font = '12px Arial';
         this.backCtx.textAlign = 'center';
         this.backCtx.fillText(player.nickname, player.x + size / 2, player.y - 20);
