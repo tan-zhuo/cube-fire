@@ -266,11 +266,12 @@ class KnifeSwingEffect {
 
 // 特效类
 class Effect {
-    constructor(x, y, type, duration = 1000) {
+    constructor(x, y, type, duration = 1000, opts = {}) {
         this.x = x;
         this.y = y;
         this.type = type;
         this.duration = duration;
+        this.angle = opts.angle || 0;
         this.startTime = Date.now();
         this.particles = [];
         this.createParticles();
@@ -278,18 +279,29 @@ class Effect {
 
     createParticles() {
         switch (this.type) {
-            case 'shoot':
-                for (let i = 0; i < 8; i++) {
-                    const angle = (Math.PI * 2 * i) / 8;
-                    const speed = 2 + Math.random() * 3;
+            case 'shoot': {
+                // 枪口喷火：沿射击方向的窄锥形火花 + 亮芯，短促消散
+                const dir = this.angle;
+                const colors = ['#fff6d5', '#ffd27f', '#f39c12', '#ff8c42'];
+                for (let i = 0; i < 7; i++) {
+                    const a = dir + (Math.random() - 0.5) * 0.55;
+                    const speed = 2.5 + Math.random() * 3.5;
                     this.particles.push(new Particle(
                         this.x, this.y,
-                        Math.cos(angle) * speed,
-                        Math.sin(angle) * speed,
-                        '#f39c12', 30, 2
+                        Math.cos(a) * speed,
+                        Math.sin(a) * speed,
+                        colors[(Math.random() * colors.length) | 0],
+                        10 + ((Math.random() * 6) | 0),
+                        1 + Math.random() * 1.5
                     ));
                 }
+                this.particles.push(new Particle(
+                    this.x, this.y,
+                    Math.cos(dir) * 0.5, Math.sin(dir) * 0.5,
+                    '#ffffff', 6, 3
+                ));
                 break;
+            }
             case 'hit':
                 for (let i = 0; i < 12; i++) {
                     const angle = Math.random() * Math.PI * 2;
@@ -1030,8 +1042,10 @@ class GameClient {
                             const ownerId = decoder.readUint32();
                             if (!this.bullets.find(b => b.id === id)) {
                                 this.bullets.push({ id, x, y, vx, vy, ownerId, damage: 25 });
-                                if (ownerId !== this.playerId && window.gameSound) {
-                                    window.gameSound.shoot(this.volFor(x, y) * 0.6);
+                                if (ownerId !== this.playerId) {
+                                    if (window.gameSound) window.gameSound.shoot(this.volFor(x, y) * 0.6);
+                                    // 远端玩家的枪口火光（子弹出生点即枪口）
+                                    this.effects.push(new Effect(x, y, 'shoot', 300, { angle: Math.atan2(vy, vx) }));
                                 }
                             }
                         }
@@ -1433,6 +1447,11 @@ class GameClient {
                 // 检查是否已存在此子弹，避免重复添加
                 if (!this.bullets.find(b => b.id === bullet.id)) {
                     this.bullets.push(bullet);
+                    if (bullet.ownerId !== this.playerId) {
+                        this.effects.push(new Effect(bullet.x, bullet.y, 'shoot', 300, {
+                            angle: Math.atan2(bullet.vy || 0, bullet.vx || 0)
+                        }));
+                    }
                 }
             });
         }
@@ -2131,8 +2150,15 @@ class GameClient {
         }
         
         
-        // 添加射击特效
-        this.effects.push(new Effect(player.x + 10, player.y + 10, 'shoot'));
+        // 枪口喷火特效（定位到枪管尖端，沿瞄准方向）
+        const size = (this.gameConfig && this.gameConfig.PLAYER_SIZE) || 20;
+        const ang = player.angle || 0;
+        const muzzle = size / 2 + 7; // 枪管画到 size/2+7，尖端即枪口
+        this.effects.push(new Effect(
+            player.x + size / 2 + Math.cos(ang) * muzzle,
+            player.y + size / 2 + Math.sin(ang) * muzzle,
+            'shoot', 300, { angle: ang }
+        ));
         if (window.gameSound) window.gameSound.shoot(1);
         this.addShake(1.5);
         
