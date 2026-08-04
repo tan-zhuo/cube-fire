@@ -1686,6 +1686,67 @@
             color: var(--accent);
         }
 
+        /* ===== 提示浮层（替代系统 alert） ===== */
+        #toastStack {
+            position: fixed;
+            top: 18px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 3000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            pointer-events: none;
+        }
+
+        .toast {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            max-width: min(440px, 90vw);
+            padding: 10px 18px;
+            font-size: 13.5px;
+            font-weight: 600;
+            color: var(--text-hi);
+            background: var(--surface-hi);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border: 1px solid var(--border-strong);
+            border-radius: 999px;
+            box-shadow: var(--shadow);
+            cursor: pointer;
+            opacity: 0;
+            transform: translateY(-14px);
+            transition: opacity 0.25s ease, transform 0.25s ease;
+            pointer-events: auto;
+        }
+
+        .toast::before {
+            content: '';
+            flex-shrink: 0;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 8px rgba(56, 189, 248, 0.8);
+        }
+
+        .toast.warn::before {
+            background: var(--gold);
+            box-shadow: 0 0 8px rgba(251, 191, 36, 0.8);
+        }
+
+        .toast.error::before {
+            background: var(--danger);
+            box-shadow: 0 0 8px rgba(248, 113, 113, 0.8);
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
         /* ===== 分队计分板 ===== */
         #matchInfo {
             font-size: 12px;
@@ -1984,6 +2045,32 @@
         </div>
     </div>
 
+    <script>
+    // 样式化提示浮层，替代系统 alert；type: info | warn | error
+    window.showToast = function (msg, type, duration) {
+        let stack = document.getElementById('toastStack');
+        if (!stack) {
+            stack = document.createElement('div');
+            stack.id = 'toastStack';
+            document.body.appendChild(stack);
+        }
+        const toast = document.createElement('div');
+        toast.className = 'toast' + (type && type !== 'info' ? ' ' + type : '');
+        toast.textContent = msg;
+        stack.appendChild(toast);
+        requestAnimationFrame(() => toast.classList.add('show'));
+        const ttl = duration || (type === 'error' ? 5000 : type === 'warn' ? 3500 : 2600);
+        let removed = false;
+        const remove = () => {
+            if (removed) return;
+            removed = true;
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 300);
+        };
+        toast.addEventListener('click', remove);
+        setTimeout(remove, ttl);
+    };
+    </script>
     <script src="sound.js"></script>
     <script src="host-core.js"></script>
     <script src="game.js"></script>

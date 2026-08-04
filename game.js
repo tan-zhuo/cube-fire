@@ -611,7 +611,8 @@ class GameClient {
     joinGame() {
         const nickname = document.getElementById('nicknameInput').value.trim();
         if (!nickname) {
-            alert('请输入昵称！');
+            window.showToast('请先输入昵称', 'warn');
+            document.getElementById('nicknameInput').focus();
             return;
         }
 
@@ -701,12 +702,12 @@ class GameClient {
         this.ws.onclose = () => {
             console.log('与服务器断开连接');
             if (this.pingTimer) clearInterval(this.pingTimer);
-            alert('与服务器断开连接，请刷新页面重试');
+            window.showToast('与服务器断开连接，请刷新页面重试', 'error', 8000);
         };
 
         this.ws.onerror = (error) => {
             console.error('WebSocket错误:', error);
-            alert('连接服务器失败，请确保服务器正在运行');
+            window.showToast('连接服务器失败，请确保服务器正在运行', 'error');
         };
     }
 
@@ -717,7 +718,7 @@ class GameClient {
             const text = (input.value || '').trim();
             if (!text) return;
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-                alert('尚未连接到服务器，无法发送消息');
+                window.showToast('尚未连接到服务器，无法发送消息', 'warn');
                 return;
             }
             // 使用JSON发送聊天消息，服务器会广播为二进制或JSON

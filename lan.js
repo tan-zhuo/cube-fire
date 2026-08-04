@@ -508,7 +508,8 @@ function showError(el, msg) {
 function requireNickname() {
     const nickname = $('nicknameInput').value.trim();
     if (!nickname) {
-        alert('请输入昵称！');
+        window.showToast('请先输入昵称', 'warn');
+        $('nicknameInput').focus();
         return null;
     }
     return nickname;
@@ -521,8 +522,8 @@ async function copyText(text, btn) {
         btn.textContent = '已复制';
         setTimeout(() => { btn.textContent = old; }, 1500);
     } catch (e) {
-        // 剪贴板不可用时回退为选中文本
-        alert('自动复制失败，请手动全选复制');
+        // 剪贴板不可用时回退为手动复制
+        window.showToast('自动复制失败，请手动全选复制', 'warn');
     }
 }
 
