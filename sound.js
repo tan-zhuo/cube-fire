@@ -1,4 +1,4 @@
-// sound.js — Web Audio 合成音效，无外部资源，离线可用
+// sound.js — Web Audio 合成音效与背景音乐，无外部资源，离线可用
 // 所有音色由振荡器 + 噪声实时合成；首次用户交互时初始化 AudioContext
 (function () {
 'use strict';
@@ -30,6 +30,12 @@ class SoundFX {
 
     toggle() {
         this.enabled = !this.enabled;
+        if (window.gameMusic) window.gameMusic.setMuted(!this.enabled);
+        const btn = document.getElementById('soundToggle');
+        if (btn) {
+            btn.textContent = this.enabled ? '声音 开' : '声音 关';
+            btn.classList.toggle('off', !this.enabled);
+        }
         return this.enabled;
     }
 
@@ -145,14 +151,217 @@ class SoundFX {
 
 window.gameSound = new SoundFX();
 
-// 浏览器要求用户交互后才能启动音频
-const boot = () => { window.gameSound.ensure(); };
+// ---------- 背景音乐引擎 ----------
+// 与音效共用 AudioContext，全部由振荡器实时合成，无外部音频文件。
+// 两条曲目按 64 步（4 小节 × 16 分音符）循环调度：
+//   menu   — 大厅氛围曲：慢速铺底和弦 + 轻柔琶音（Am7 F△7 C△7 G6）
+//   battle — 战斗节奏曲：鼓组 + 锯齿低音 + 方波琶音（Am F C G）
+class MusicEngine {
+    constructor(sfx) {
+        this.sfx = sfx;
+        this.gain = null;
+        this.track = null;   // 'menu' | 'battle' | null
+        this.muted = false;
+        this.step = 0;
+        this.nextTime = 0;
+        this.timer = null;
+        this._nb = null;     // 噪声缓冲（鼓组用）
+    }
+
+    ensure() {
+        if (!this.sfx.ensure()) return false;
+        if (!this.gain) {
+            this.gain = this.sfx.ctx.createGain();
+            this.gain.gain.value = this.muted ? 0 : 0.55;
+            this.gain.connect(this.sfx.master);
+        }
+        return true;
+    }
+
+    play(track) {
+        if (!this.ensure()) return;
+        if (this.track === track) return;
+        this.track = track;
+        this.step = 0;
+        this.nextTime = this.sfx.ctx.currentTime + 0.08;
+        if (!this.timer) this.timer = setInterval(() => this._tick(), 50);
+    }
+
+    stop() {
+        this.track = null;
+        if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    }
+
+    setMuted(m) {
+        this.muted = m;
+        if (!this.gain) return;
+        const t = this.sfx.ctx.currentTime;
+        this.gain.gain.cancelScheduledValues(t);
+        this.gain.gain.setTargetAtTime(m ? 0 : 0.55, t, 0.05);
+    }
+
+    _tick() {
+        if (!this.track || this.muted || !this.sfx.ctx) return;
+        const now = this.sfx.ctx.currentTime;
+        // 后台标签页节流或静音恢复后追帧：跳到当前时间，避免积压的步一次性爆发
+        if (this.nextTime < now - 0.05) this.nextTime = now + 0.05;
+        const spb = 60 / (this.track === 'battle' ? 132 : 76) / 4; // 每 16 分音符的秒数
+        while (this.nextTime < now + 0.25) {
+            try {
+                if (this.track === 'battle') this._battleStep(this.step, this.nextTime, spb);
+                else this._menuStep(this.step, this.nextTime, spb);
+            } catch (e) {}
+            this.nextTime += spb;
+            this.step = (this.step + 1) % 64;
+        }
+    }
+
+    // ---------- 发声单元 ----------
+    _f(midi) { return 440 * Math.pow(2, (midi - 69) / 12); }
+
+    _note(type, midi, t, dur, vol, opts = {}) {
+        const ctx = this.sfx.ctx;
+        const osc = ctx.createOscillator();
+        osc.type = type;
+        osc.frequency.setValueAtTime(this._f(midi), t);
+        let node = osc;
+        if (opts.cutoff) {
+            const lp = ctx.createBiquadFilter();
+            lp.type = 'lowpass';
+            lp.frequency.setValueAtTime(opts.cutoff, t);
+            osc.connect(lp);
+            node = lp;
+        }
+        const g = ctx.createGain();
+        const atk = opts.attack || 0.006;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.linearRampToValueAtTime(vol, t + atk);
+        g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        node.connect(g);
+        g.connect(this.gain);
+        osc.start(t);
+        osc.stop(t + dur + 0.03);
+    }
+
+    _noiseHit(t, dur, vol, freq, type = 'highpass') {
+        const ctx = this.sfx.ctx;
+        if (!this._nb) {
+            const len = ctx.sampleRate * 0.5;
+            this._nb = ctx.createBuffer(1, len, ctx.sampleRate);
+            const d = this._nb.getChannelData(0);
+            for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+        }
+        const src = ctx.createBufferSource();
+        src.buffer = this._nb;
+        src.loop = true;
+        const f = ctx.createBiquadFilter();
+        f.type = type;
+        f.frequency.setValueAtTime(freq, t);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(vol, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        src.connect(f);
+        f.connect(g);
+        g.connect(this.gain);
+        src.start(t);
+        src.stop(t + dur + 0.02);
+    }
+
+    _kick(t) {
+        const ctx = this.sfx.ctx;
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(150, t);
+        osc.frequency.exponentialRampToValueAtTime(44, t + 0.11);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.42, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.13);
+        osc.connect(g);
+        g.connect(this.gain);
+        osc.start(t);
+        osc.stop(t + 0.15);
+    }
+
+    _snare(t) {
+        this._noiseHit(t, 0.10, 0.17, 1700, 'highpass');
+        this._note('triangle', 53, t, 0.06, 0.10);
+    }
+
+    _hat(t, vol) {
+        this._noiseHit(t, 0.035, vol, 7500, 'highpass');
+    }
+
+    // ---------- 曲目 ----------
+    _battleStep(s, t, spb) {
+        const bar = (s / 16) | 0;
+        const p = s % 16;
+        // 鼓组：四踩 + 2/4 拍军鼓 + 8 分踩镲
+        if (p % 4 === 0) this._kick(t);
+        if (p === 4 || p === 12) this._snare(t);
+        if (p % 2 === 0) this._hat(t, p % 4 === 2 ? 0.15 : 0.08);
+        if (bar === 3 && p === 15) this._hat(t, 0.14);
+        // 低音：Am F C G，8 分音符驱动，句尾翻高八度
+        const bass = [33, 29, 36, 31][bar];
+        if (p % 2 === 0) {
+            const up = (p === 6 || p === 14) ? 12 : 0;
+            this._note('sawtooth', bass + up, t, spb * 1.8, 0.30, { cutoff: 420, attack: 0.004 });
+        }
+        // 琶音：和弦内音 16 分上行
+        const chords = [[69, 72, 76, 81], [65, 69, 72, 77], [64, 67, 72, 76], [67, 71, 74, 79]];
+        this._note('square', chords[bar][p % 4], t, spb * 1.1, 0.05, { cutoff: 2600 });
+        // 每小节三角波铺底和声
+        if (p === 0) {
+            const pad = [[57, 64], [53, 60], [60, 67], [55, 62]][bar];
+            for (const m of pad) this._note('triangle', m, t, spb * 15, 0.045, { attack: 0.3 });
+        }
+    }
+
+    _menuStep(s, t, spb) {
+        const bar = (s / 16) | 0;
+        const p = s % 16;
+        const chords = [
+            [57, 60, 64, 67],  // Am7
+            [53, 57, 60, 64],  // Fmaj7
+            [48, 55, 59, 64],  // Cmaj7
+            [50, 55, 59, 64],  // G6/D
+        ];
+        const tones = chords[bar];
+        // 整小节铺底和弦 + 低音根音
+        if (p === 0) {
+            for (const m of tones) this._note('triangle', m, t, spb * 16, 0.075, { attack: 0.8 });
+            this._note('sine', tones[0] - 12, t, spb * 14, 0.13, { attack: 0.15 });
+        }
+        // 轻柔正弦琶音（8 分音符）
+        if (p % 2 === 0) {
+            const order = [0, 1, 2, 3, 2, 1, 0, 2];
+            this._note('sine', tones[order[(p / 2) | 0]] + 12, t, spb * 3, 0.05, { attack: 0.03 });
+        }
+        // 循环第四小节的高音点缀
+        if (s === 56) this._note('sine', tones[3] + 24, t, spb * 6, 0.035, { attack: 0.05 });
+    }
+}
+
+window.gameMusic = new MusicEngine(window.gameSound);
+
+// 浏览器要求用户交互后才能启动音频；首次交互时顺带拉起背景音乐
+const boot = () => {
+    window.gameSound.ensure();
+    if (!window.gameMusic.track && window.gameSound.enabled) {
+        const login = document.getElementById('loginModal');
+        const inGame = login && login.classList.contains('hidden');
+        window.gameMusic.play(inGame ? 'battle' : 'menu');
+    }
+};
 document.addEventListener('pointerdown', boot);
 document.addEventListener('keydown', (e) => {
     boot();
-    // M 键静音/取消静音
+    // M 键静音/取消静音（音效 + 音乐）
     if ((e.key === 'm' || e.key === 'M') && !e.target.matches('input, textarea')) {
         window.gameSound.toggle();
     }
+});
+document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('soundToggle');
+    if (btn) btn.addEventListener('click', () => window.gameSound.toggle());
 });
 })();

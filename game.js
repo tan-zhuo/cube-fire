@@ -592,6 +592,7 @@ class GameClient {
             document.getElementById('chatroom').classList.remove('hidden');
             const ns = document.getElementById('networkStatus');
             if (ns) ns.classList.remove('hidden');
+            if (window.gameMusic) window.gameMusic.play('battle');
         };
     }
 
