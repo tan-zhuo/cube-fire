@@ -450,6 +450,34 @@ class Effect {
                 }
                 break;
             }
+            case 'crateBreak': {
+                // 木箱碎裂：木屑翻滚 + 尘土
+                for (let i = 0; i < 10; i++) {
+                    const a = Math.random() * Math.PI * 2;
+                    const speed = 1 + Math.random() * 3;
+                    this.particles.push(new Particle(
+                        this.x, this.y,
+                        Math.cos(a) * speed,
+                        Math.sin(a) * speed - 1.2,
+                        Math.random() < 0.5 ? '#c8945a' : '#8c5a22',
+                        22 + ((Math.random() * 14) | 0),
+                        1.8 + Math.random() * 2,
+                        { gravity: 0.14, shape: 'rect', spin: 0.3 }
+                    ));
+                }
+                for (let i = 0; i < 6; i++) {
+                    const a = Math.random() * Math.PI * 2;
+                    this.particles.push(new Particle(
+                        this.x, this.y,
+                        Math.cos(a) * (0.5 + Math.random()),
+                        Math.sin(a) * (0.5 + Math.random()) - 0.4,
+                        'rgba(170, 180, 200, 0.45)',
+                        24 + ((Math.random() * 10) | 0),
+                        2.5 + Math.random() * 2
+                    ));
+                }
+                break;
+            }
             case 'crate': {
                 // 开箱：内容色碎片爆裂 + 白色亮片（光环与浮字在 draw 中绘制）
                 for (let i = 0; i < 14; i++) {
@@ -1283,6 +1311,22 @@ class GameClient {
                 if (window.gameSound) window.gameSound.streakEnd();
                 break;
 
+            case 'terrainRemove': {
+                // 地形被摧毁：移除方块 + 木箱碎裂特效
+                const ids = message.ids || [];
+                this.terrain = (this.terrain || []).filter(b => !ids.includes(b.id));
+                (message.breaks || []).forEach(p => {
+                    this.effects.push(new Effect(p.x, p.y, 'crateBreak', 700));
+                    if (window.gameSound) window.gameSound.crateBreak(this.volFor(p.x, p.y));
+                });
+                break;
+            }
+
+            case 'terrainSync':
+                // 新一局恢复地形
+                if (Array.isArray(message.terrain)) this.terrain = message.terrain;
+                break;
+
             case 'explosion': {
                 // 爆炸：视效 + 声音 + 距离衰减震屏
                 this.effects.push(new Effect(message.x, message.y, 'explosion', 750, {
@@ -1761,6 +1805,10 @@ class GameClient {
                     if (window.gameSound) (isKill ? window.gameSound.death() : window.gameSound.hurt());
                     this.addShake(isKill ? 9 : 5);
                     this.triggerFlash('#e03131', isKill ? 0.30 : 0.16);
+                    if (isKill) {
+                        const killer = this.players.get(shooterId);
+                        this.deathInfo = { killerId: shooterId, killerName: killer ? killer.nickname : '', at: Date.now() };
+                    }
                 } else if (shooterId === this.playerId) {
                     if (window.gameSound) (isKill ? window.gameSound.kill() : window.gameSound.hitConfirm());
                     // 击中标记（手感反馈）
@@ -1924,6 +1972,30 @@ class GameClient {
         }
     }
 
+    // 死亡反馈：被谁击败 + 复活倒计时（昵称 textContent 防 XSS）
+    updateDeathOverlay() {
+        const overlay = document.getElementById('deathOverlay');
+        if (!overlay || !this.playerId) return;
+        const me = this.players.get(this.playerId);
+        const dead = me && !me.isAlive && this.deathInfo;
+        if (!dead) {
+            overlay.classList.add('hidden');
+            return;
+        }
+        overlay.classList.remove('hidden');
+        const title = document.getElementById('deathTitle');
+        if (title) {
+            title.textContent = this.deathInfo.killerName
+                ? `被 ${this.deathInfo.killerName} 击败了`
+                : '你被击败了';
+        }
+        const cd = document.getElementById('deathCountdown');
+        if (cd) {
+            const total = (this.gameConfig && this.gameConfig.RESPAWN_TIME) || 3000;
+            cd.textContent = Math.max(0, Math.ceil((total - (Date.now() - this.deathInfo.at)) / 1000));
+        }
+    }
+
     // 连杀播报横幅（昵称为用户输入，textContent 防 XSS）
     showStreakBanner(text, cls = '') {
         const el = document.getElementById('streakBanner');
@@ -1942,6 +2014,16 @@ class GameClient {
         if (!nameEl || !magEl || !resEl || !this.playerId) return;
         const me = this.players.get(this.playerId);
         if (!me) return;
+        // 感染者：显示利爪，无弹药概念
+        if (this.gameConfig && this.gameConfig.GAME_MODE === 'infect' && me.team === 1) {
+            nameEl.textContent = '感染者';
+            magEl.textContent = '利爪';
+            resEl.textContent = '';
+            const tk = document.getElementById('reloadTrack');
+            if (tk) tk.classList.add('hidden');
+            return;
+        }
+
         const conf = this.weaponConf(me.weapon || 0);
         const now = Date.now();
         const reloading = !!(me.reloadEnd && me.reloadEnd > now);
@@ -2214,11 +2296,15 @@ class GameClient {
         };
 
         if (isTeamGame) {
-            // 分队计分板：红蓝分组显示，组头显示团队总分
-            [
+            // 分队计分板：分组显示，组头显示团队总分（感染模式用感染者/幸存者标签）
+            const isInfect = this.gameConfig && this.gameConfig.GAME_MODE === 'infect';
+            (isInfect ? [
+                { team: 1, name: '感染者', color: '#2ecc71' },
+                { team: 2, name: '幸存者', color: '#3498db' }
+            ] : [
                 { team: 1, name: '红队', color: '#e74c3c' },
                 { team: 2, name: '蓝队', color: '#3498db' }
-            ].forEach(meta => {
+            ]).forEach(meta => {
                 const members = allPlayers
                     .filter(p => p.team === meta.team)
                     .sort((a, b) => b.score - a.score);
@@ -2251,7 +2337,8 @@ class GameClient {
         const el = document.getElementById('matchInfo');
         if (!el || !this.gameConfig) return;
         const mapName = this.gameConfig.MAP_NAME || '经典竞技场';
-        const mode = this.gameConfig.TEAM_MODE ? '红蓝对抗' : '个人混战';
+        const mode = this.gameConfig.GAME_MODE === 'infect' ? '感染模式'
+            : this.gameConfig.TEAM_MODE ? '红蓝对抗' : '个人混战';
         el.textContent = `${mapName} · ${mode}`;
     }
 
@@ -2681,9 +2768,10 @@ class GameClient {
         // 更新玩家移动
         this.updatePlayerMovement();
 
-        // 按住左键连发 + 弹药HUD
+        // 按住左键连发 + 弹药HUD + 死亡反馈
         this.handleAutoFire();
         this.updateAmmoHUD();
+        this.updateDeathOverlay();
 
         // 他人按帧平滑靠拢 + 轻量外推（减少观众端漂移感）
         const nowMs = Date.now();
@@ -2952,6 +3040,13 @@ class GameClient {
         let rate = conf.fireRate || 200;
         if (me.powerups && me.powerups.rapidFire && me.powerups.rapidFire.active) {
             rate = Math.floor(rate * 0.5);
+        }
+        // 感染模式：感染者的"开火"是近战利爪
+        if (this.gameConfig && this.gameConfig.GAME_MODE === 'infect' && me.team === 1) {
+            if (now - (this.lastClientShot || 0) < 1000) return;
+            this.lastClientShot = now;
+            this.meleeAttack();
+            return;
         }
         if (now - (this.lastClientShot || 0) < rate) return;
         if ((me.reloadEnd && me.reloadEnd > now) || (me.mag !== undefined && me.mag <= 0)) {
@@ -3365,9 +3460,10 @@ class GameClient {
     drawPlayer(player) {
         const size = this.gameConfig ? this.gameConfig.PLAYER_SIZE : 20;
 
-        // 队伍标识环（分队模式下在脚底画队伍色椭圆环）
+        // 队伍标识环（分队/感染模式下在脚底画阵营色椭圆环）
         if (player.isAlive && (player.team === 1 || player.team === 2)) {
-            const teamAccent = player.team === 1 ? '#e74c3c' : '#3498db';
+            const isInfect = this.gameConfig && this.gameConfig.GAME_MODE === 'infect';
+            const teamAccent = player.team === 1 ? (isInfect ? '#2ecc71' : '#e74c3c') : '#3498db';
             this.backCtx.save();
             this.backCtx.strokeStyle = teamAccent;
             this.backCtx.globalAlpha = 0.85;
@@ -3376,6 +3472,22 @@ class GameClient {
             this.backCtx.ellipse(player.x + size / 2, player.y + size + 3, size * 0.72, size * 0.3, 0, 0, Math.PI * 2);
             this.backCtx.stroke();
             this.backCtx.restore();
+        }
+
+        // 自己死亡期间：红圈脉冲标记击杀者
+        if (this.deathInfo && player.id === this.deathInfo.killerId && player.isAlive) {
+            const meP = this.players.get(this.playerId);
+            if (meP && !meP.isAlive) {
+                const pulse = 0.5 + Math.sin(Date.now() * 0.008) * 0.3;
+                this.backCtx.save();
+                this.backCtx.globalAlpha = pulse;
+                this.backCtx.strokeStyle = '#ff6b6b';
+                this.backCtx.lineWidth = 2.5;
+                this.backCtx.beginPath();
+                this.backCtx.arc(player.x + size / 2, player.y + size / 2, size * 1.15, 0, Math.PI * 2);
+                this.backCtx.stroke();
+                this.backCtx.restore();
+            }
         }
 
         this.backCtx.save();

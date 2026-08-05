@@ -128,6 +128,12 @@ class SoundFX {
         this.noise(0.02, 4000, 2500, 0.08, 0, 'highpass');
     }
 
+    crateBreak(vol = 1) { // 木箱碎裂：闷响 + 木屑脆声
+        this.noise(0.12, 900, 150, 0.35 * vol);
+        this.noise(0.08, 3200, 900, 0.2 * vol, 0.02, 'bandpass');
+        this.tone('triangle', 160, 90, 0.1, 0.2 * vol);
+    }
+
     streak(level = 2) { // 连杀号角：级别越高音阶越长越亮
         const base = [392, 494, 587, 740, 880, 1109]; // G4 B4 D5 F#5 A5 C#6
         const n = Math.min(base.length, 1 + level);

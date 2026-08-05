@@ -30,7 +30,9 @@ CUBEFIRE·立方火线：多人局域网2.5D俯视角射击游戏，支持两种
 
 ### 地图与对战模式
 - 地图注册表`MAPS`定义在`server.js`/`host-core.js`（两份需保持一致）：`classic`经典竞技场、`fortress`双子要塞、`maze`迷宫回廊、`crossfire`十字堡垒，均为1200x800网格地图
-- 对战模式：个人混战（默认）或红蓝对抗（`matchConfig.teamMode`）；分队模式下自动均衡分队、按队分色、分区出生（`teamZones`）、友军伤害豁免、机器人不打队友
+- 对战模式：个人混战（默认）、红蓝对抗（`matchConfig.teamMode`）或感染模式（`matchConfig.infectMode`，复用team字段：1=感染者/2=幸存者，随机一人感染、仅近战150血绿色、被杀转阵营、全灭感染胜/撑到时间幸存胜，`updateInfectMode`惰性分配）；分队模式下自动均衡分队、按队分色、分区出生（`teamZones`）、友军伤害豁免、机器人不打队友
+- 可破坏地形：木箱(crate)被爆炸摧毁、油桶(barrel)被子弹/爆炸引爆连锁（`destroyTerrainInRadius`/`detonateBarrelByBullet`，`terrainRemove`/`terrainSync`走JSON广播），回合重置恢复地形
+- 连杀系统：`registerKill`（含近战路径），`killstreak`/`streakEnd`消息JSON广播，客户端中央横幅
 - 房主在大厅创建房间时选择地图/模式；服务器模式通过环境变量`MAP_ID`/`TEAM_MODE=1`指定
 - 游戏内聊天命令：`/map 地图ID`、`/team on|off`（下一局生效）、`/bot N`
 - 协议中玩家数据的`color`字符串后新增`team`字节(uint8)，改动编码时三个文件需同步

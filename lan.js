@@ -170,7 +170,7 @@ function lobbyLocalList() {
     const out = [];
     Lobby.rooms.forEach((r, code) => {
         if (now - r.updatedAt > ROOM_TTL_MS) Lobby.rooms.delete(code);
-        else out.push({ code: r.code, hostName: r.hostName, mapName: r.mapName, teamMode: r.teamMode, players: r.players });
+        else out.push({ code: r.code, hostName: r.hostName, mapName: r.mapName, teamMode: r.teamMode, mode: r.mode, players: r.players });
     });
     return out.sort((a, b) => b.players - a.players);
 }
@@ -183,6 +183,7 @@ function lobbyHandleMessage(msg, reply) {
             hostName: String(msg.room.hostName || '无名房主').slice(0, 15),
             mapName: String(msg.room.mapName || '未知地图').slice(0, 20),
             teamMode: !!msg.room.teamMode,
+            mode: String(msg.room.mode || '').slice(0, 10),
             players: Math.max(0, Math.min(99, msg.room.players | 0)),
             updatedAt: Date.now()
         });
@@ -385,6 +386,7 @@ function hostStartRoomService() {
                         hostName: hostRoomInfo.hostName,
                         mapName: hostRoomInfo.mapName,
                         teamMode: hostRoomInfo.teamMode,
+                        mode: hostRoomInfo.mode,
                         players: window.GameHost.connectionCount
                     }).catch(() => {});
                 };
@@ -573,16 +575,18 @@ function startAsHost() {
     const mapSelect = $('mapSelect');
     const teamModeSelect = $('teamModeSelect');
     const visibilitySelect = $('roomVisibilitySelect');
-    const teamMode = teamModeSelect ? teamModeSelect.value === 'team' : false;
+    const modeVal = teamModeSelect ? teamModeSelect.value : 'ffa';
     hostRoomInfo = {
         hostName: nickname,
         mapName: (mapSelect && mapSelect.selectedOptions[0]) ? mapSelect.selectedOptions[0].textContent : '经典竞技场',
-        teamMode,
+        teamMode: modeVal === 'team',
+        mode: modeVal,
         isPublic: !visibilitySelect || visibilitySelect.value === 'public'
     };
     window.GameHost.start({
         mapId: mapSelect ? mapSelect.value : undefined,
-        teamMode
+        teamMode: modeVal === 'team',
+        infectMode: modeVal === 'infect'
     });
     window.createGameTransport = createLoopbackTransport;
     window.game.joinGame();
@@ -725,7 +729,8 @@ function renderRoomList(rooms) {
         host.textContent = r.hostName;
         const meta = document.createElement('span');
         meta.className = 'room-meta';
-        meta.textContent = `${r.mapName} · ${r.teamMode ? '红蓝对抗' : '个人混战'} · ${r.players}人`;
+        const modeName = ({ team: '红蓝对抗', infect: '感染模式' })[r.mode] || (r.teamMode ? '红蓝对抗' : '个人混战');
+        meta.textContent = `${r.mapName} · ${modeName} · ${r.players}人`;
         const go = document.createElement('span');
         go.className = 'room-go';
         go.textContent = '加入 →';

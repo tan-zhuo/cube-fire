@@ -140,6 +140,8 @@ const DEFAULT_MAP_ID = 'classic';
 const matchConfig = {
     mapId: DEFAULT_MAP_ID,
     teamMode: false,
+    infectMode: false,        // 感染模式
+    infectedAssigned: false,  // 本局是否已选出初始感染者
     pendingMapId: null,
     pendingTeamMode: null
 };
@@ -260,6 +262,7 @@ function encodeJoined(playerId) {
         MAP_ID: matchConfig.mapId,
         MAP_NAME: map.name,
         TEAM_MODE: matchConfig.teamMode,
+        GAME_MODE: matchConfig.infectMode ? 'infect' : (matchConfig.teamMode ? 'team' : 'ffa'),
         WEAPONS: WEAPONS,
         WEAPON_IDS: WEAPON_IDS
     }));
@@ -1052,7 +1055,8 @@ class Player {
         const spawn = findSpawnPosition(this.team, this.id);
         this.x = spawn.x;
         this.y = spawn.y;
-        this.health = GAME_CONFIG.MAX_HEALTH;
+        // 感染者体质更强（150 血）
+        this.health = (matchConfig.infectMode && this.team === 1) ? 150 : GAME_CONFIG.MAX_HEALTH;
         this.isAlive = true;
         this.respawnTime = 0;
         this.equipWeapon('rifle'); // 复活重置为默认武器
@@ -1122,6 +1126,8 @@ class Player {
 
     // 开火；返回子弹数组（霰弹枪一次多发），不可开火返回 null
     shoot(targetX, targetY) {
+        // 感染模式：感染者只能近战
+        if (matchConfig.infectMode && this.team === 1) return null;
         // 空仓时自动开始换弹
         if (this.isAlive && !this.reloading && this.mag <= 0) {
             this.startReload();
@@ -1403,7 +1409,8 @@ const bots = new Map(); // playerId -> 机器人状态
 function addBot() {
     if (bots.size >= BOT_LIMIT) return false;
     const playerId = gameState.nextPlayerId++;
-    const team = matchConfig.teamMode ? pickBalancedTeam() : 0;
+    const team = matchConfig.teamMode ? pickBalancedTeam()
+        : (matchConfig.infectMode && matchConfig.infectedAssigned ? 2 : 0); // 感染局中途加入为幸存者
     const spawn = findSpawnPosition(team, playerId);
     const name = 'AI·' + BOT_NAMES[(playerId - 1) % BOT_NAMES.length];
     const player = new Player(playerId, name, spawn.x, spawn.y);
@@ -1572,6 +1579,12 @@ function updateBots(now) {
             const ex = enemy.x + size / 2, ey = enemy.y + size / 2;
             const d = Math.hypot(ex - cx, ey - cy);
             me.angle = Math.atan2(ey - cy, ex - cx);
+
+            // 感染者没有枪：锁定目标直冲近身
+            if (matchConfig.infectMode && me.team === 1) {
+                bot.waypointX = ex;
+                bot.waypointY = ey;
+            }
 
             if (d <= GAME_CONFIG.MELEE_RANGE * 0.9 && me.canMelee()) {
                 me.meleeAttack(ex, ey);
@@ -2488,7 +2501,8 @@ function handleJoin(ws, message) {
     const playerId = gameState.nextPlayerId++;
 
     // 分队模式自动均衡分队，并在本队出生区找生成位置
-    const team = matchConfig.teamMode ? pickBalancedTeam() : 0;
+    const team = matchConfig.teamMode ? pickBalancedTeam()
+        : (matchConfig.infectMode && matchConfig.infectedAssigned ? 2 : 0); // 感染局中途加入为幸存者
     const spawn = findSpawnPosition(team, playerId);
 
     // 创建玩家
@@ -2966,6 +2980,62 @@ function checkPowerupPickup() {
     });
 }
 
+// ===================== 感染模式 =====================
+// 随机一人成为感染者（绿色/仅近战/150血），幸存者被杀即转阵营；
+// 幸存者全灭感染者胜，撑到时间到幸存者胜
+function applyInfectColor(player) {
+    if (player.team === 1) {
+        const greens = ['#2ecc71', '#27ae60', '#82e0aa', '#1e8449'];
+        player.color = greens[(player.id - 1) % greens.length];
+    } else {
+        player.color = PLAYER_COLORS[(player.id - 1) % PLAYER_COLORS.length];
+    }
+}
+
+function infectPlayer(player, byName) {
+    player.team = 1;
+    applyInfectColor(player);
+    player.equipWeapon('rifle');
+    const survivors = Array.from(gameState.players.values()).filter(p => p.team === 2).length;
+    broadcast({
+        type: 'chatMessage',
+        playerId: 0,
+        playerName: '系统',
+        content: byName
+            ? `${player.nickname} 被 ${byName} 感染了！剩余幸存者 ${survivors} 人`
+            : `${player.nickname} 成为了初始感染者！小心近战利爪`,
+        timestamp: Date.now()
+    });
+}
+
+function updateInfectMode() {
+    const players = Array.from(gameState.players.values());
+    if (!matchConfig.infectedAssigned) {
+        if (players.length >= 2) {
+            players.forEach(p => { p.team = 2; applyInfectColor(p); });
+            infectPlayer(players[Math.floor(Math.random() * players.length)], null);
+            matchConfig.infectedAssigned = true;
+        }
+        return;
+    }
+    // 感染者全部离场：下个 tick 重新分配
+    if (!players.some(p => p.team === 1)) {
+        matchConfig.infectedAssigned = false;
+        return;
+    }
+    // 幸存者全灭：感染者胜，提前结束本局
+    if (players.length >= 2 && !players.some(p => p.team === 2)) {
+        broadcast({
+            type: 'chatMessage',
+            playerId: 0,
+            playerName: '系统',
+            content: '全员感染！感染者阵营获胜',
+            timestamp: Date.now()
+        });
+        endGame();
+    }
+}
+
 // 连杀登记：击杀者连杀+1（≥2播报），被击杀者连杀清零（≥3被终结时播报）
 function registerKill(shooter, victim) {
     if (!shooter || !victim) return;
@@ -2980,6 +3050,10 @@ function registerKill(shooter, victim) {
     }
     victim.streak = 0;
     shooter.streak = (shooter.streak | 0) + 1;
+    // 感染模式：幸存者被击杀即转入感染阵营
+    if (matchConfig.infectMode && victim.team === 2) {
+        infectPlayer(victim, shooter.nickname);
+    }
     if (shooter.streak >= 2) {
         broadcast({
             type: 'killstreak',
@@ -3039,6 +3113,8 @@ function explodeAt(x, y, radius, damageBase, shooterId, weaponName) {
         applyDamageTo(player, damage, shooterId, weaponName);
     });
     broadcast({ type: 'explosion', x: Math.round(x), y: Math.round(y), radius: Math.round(radius) });
+    // 爆炸摧毁范围内的木箱/引爆油桶
+    destroyTerrainInRadius(x, y, radius, shooterId);
 }
 
 function explodeBullet(bullet) {
@@ -3049,6 +3125,45 @@ function explodeBullet(bullet) {
         bullet.ownerId,
         bullet.weaponName || '火箭筒'
     );
+}
+
+// ===================== 可破坏地形 =====================
+// 木箱(crate)可被爆炸摧毁；油桶(barrel)被爆炸或子弹引爆产生连锁爆炸（计入触发者战绩）
+function findTerrainBlockAt(x, y, half = 3) {
+    // 按子弹半径扩展判定，与 checkTerrainCollision 的矩形检测一致；油桶优先匹配
+    const hits = gameState.terrain.filter(b =>
+        x + half >= b.x && x - half <= b.x + b.width &&
+        y + half >= b.y && y - half <= b.y + b.height);
+    return hits.find(b => b.type === 'barrel') || hits[0];
+}
+
+function destroyTerrainInRadius(x, y, radius, shooterId) {
+    const hit = gameState.terrain.filter(b => {
+        if (b.type !== 'crate' && b.type !== 'barrel') return false;
+        const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+        return Math.hypot(cx - x, cy - y) <= radius + Math.max(b.width, b.height) / 2;
+    });
+    if (!hit.length) return;
+    const ids = hit.map(b => b.id);
+    gameState.terrain = gameState.terrain.filter(b => !ids.includes(b.id));
+    broadcast({
+        type: 'terrainRemove',
+        ids,
+        breaks: hit.filter(b => b.type === 'crate').map(b => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 }))
+    });
+    // 油桶连锁爆炸（错峰引爆，层次感）
+    hit.filter(b => b.type === 'barrel').forEach((b, i) => {
+        setTimeout(() => {
+            explodeAt(b.x + b.width / 2, b.y + b.height / 2, 85, 70, shooterId, '油桶');
+        }, 130 + i * 110);
+    });
+}
+
+// 子弹打中油桶：立即引爆
+function detonateBarrelByBullet(block, shooterId) {
+    gameState.terrain = gameState.terrain.filter(b => b.id !== block.id);
+    broadcast({ type: 'terrainRemove', ids: [block.id], breaks: [] });
+    explodeAt(block.x + block.width / 2, block.y + block.height / 2, 85, 70, shooterId, '油桶');
 }
 
 // 子弹碰撞处理函数
@@ -3088,12 +3203,18 @@ function processBulletCollisions(bullet) {
         if (isRocket) {
             explodeBullet(bullet);
         } else {
-            broadcast({
-                type: 'bulletHitWall',
-                x: bullet.x,
-                y: bullet.y,
-                bulletId: bullet.id
-            });
+            // 子弹打中油桶：引爆（计入射手战绩）
+            const block = findTerrainBlockAt(nextX, nextY);
+            if (block && block.type === 'barrel') {
+                detonateBarrelByBullet(block, bullet.ownerId);
+            } else {
+                broadcast({
+                    type: 'bulletHitWall',
+                    x: bullet.x,
+                    y: bullet.y,
+                    bulletId: bullet.id
+                });
+            }
         }
         return false; // 移除子弹
     }
@@ -3139,6 +3260,20 @@ function endGame() {
     // 获取最终排行榜
     const finalPlayers = getPlayersList();
 
+    // 感染模式：播报胜负
+    if (matchConfig.infectMode) {
+        const survivors = Array.from(gameState.players.values()).filter(p => p.team === 2);
+        broadcast({
+            type: 'chatMessage',
+            playerId: 0,
+            playerName: '系统',
+            content: survivors.length
+                ? `幸存者顶住了！${survivors.map(p => p.nickname).join('、')} 活到了最后`
+                : '感染者阵营获胜！',
+            timestamp: Date.now()
+        });
+    }
+
     // 分队模式：播报团队胜负
     if (matchConfig.teamMode) {
         const totals = { 1: 0, 2: 0 };
@@ -3183,10 +3318,19 @@ function resetGameState() {
         matchConfig.teamMode = matchConfig.pendingTeamMode;
         matchConfig.pendingTeamMode = null;
     }
+    // 感染模式：下一局重新随机感染者
+    matchConfig.infectedAssigned = false;
+
+    // 无条件重生成地形（恢复上一局被炸毁的木箱/油桶）
+    gameState.terrain = generateTerrain(matchConfig.mapId);
     if (mapChanged) {
-        gameState.terrain = generateTerrain(matchConfig.mapId);
         console.log(`地图切换为 ${MAPS[matchConfig.mapId].name}，生成 ${gameState.terrain.length} 个地形块`);
     }
+    // 广播完整地形，客户端替换本地副本
+    broadcast({
+        type: 'terrainSync',
+        terrain: gameState.terrain.map(b => ({ id: b.id, x: b.x, y: b.y, width: b.width, height: b.height, type: b.type }))
+    });
 
     // 分队维护：开启分队时给没有队伍的玩家均衡补队，关闭时清空队伍并恢复个人配色
     gameState.players.forEach(player => {
@@ -3344,6 +3488,11 @@ function updateGameLogic() {
             return;
         }
     }
+
+    // 感染模式：初始感染者分配与胜负检查
+    if (matchConfig.infectMode && !gameState.isGameEnded) {
+        updateInfectMode();
+    }
     
     // 计算delta时间
     const currentTime = Date.now();
@@ -3455,7 +3604,10 @@ function start(opts) {
     if (opts && typeof opts.teamMode === 'boolean') {
         matchConfig.teamMode = opts.teamMode;
     }
-    console.log(`对局配置：地图=${MAPS[matchConfig.mapId].name}，模式=${matchConfig.teamMode ? '红蓝对抗' : '个人混战'}`);
+    if (opts && typeof opts.infectMode === 'boolean') {
+        matchConfig.infectMode = opts.infectMode;
+    }
+    console.log(`对局配置：地图=${MAPS[matchConfig.mapId].name}，模式=${matchConfig.infectMode ? '感染模式' : matchConfig.teamMode ? '红蓝对抗' : '个人混战'}`);
 
     // 初始化地形
     gameState.terrain = generateTerrain(matchConfig.mapId);

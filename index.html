@@ -732,6 +732,41 @@
             #inviteToggle { padding: 6px 12px; font-size: 11px; }
         }
 
+        /* 死亡反馈 */
+        #deathOverlay {
+            position: absolute;
+            top: 34%;
+            left: calc((100vw - var(--sidebar-w)) / 2);
+            transform: translateX(-50%);
+            z-index: 140;
+            text-align: center;
+            pointer-events: none;
+        }
+
+        #deathTitle {
+            font-size: 30px;
+            font-weight: 900;
+            letter-spacing: 3px;
+            color: #ff8080;
+            -webkit-text-stroke: 1.2px rgba(20, 26, 48, 0.95);
+            text-shadow: 0 4px 0 rgba(20, 26, 48, 0.6), 0 6px 16px rgba(0, 0, 0, 0.55);
+        }
+
+        #deathSub {
+            margin-top: 8px;
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-mid);
+            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+        }
+
+        #deathSub span {
+            font-family: var(--mono);
+            font-weight: 800;
+            font-size: 17px;
+            color: #ffd76b;
+        }
+
         /* 连杀播报横幅 */
         #streakBanner {
             position: absolute;
@@ -1963,6 +1998,12 @@
         <!-- 连杀播报横幅 -->
         <div id="streakBanner"></div>
 
+        <!-- 死亡反馈 -->
+        <div id="deathOverlay" class="hidden">
+            <div id="deathTitle">你被击败了</div>
+            <div id="deathSub">复活倒计时 <span id="deathCountdown">3</span></div>
+        </div>
+
         <!-- 触屏控件（触屏设备进入游戏后显示） -->
         <div id="touchControls" class="hidden">
             <div id="joyBase"><div id="joyKnob"></div></div>
@@ -2140,6 +2181,7 @@
                             <select id="teamModeSelect">
                                 <option value="ffa">个人混战</option>
                                 <option value="team">红蓝对抗</option>
+                                <option value="infect">感染模式</option>
                             </select>
                         </div>
                         <div class="host-option">
