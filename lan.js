@@ -81,12 +81,18 @@ function waitIceComplete(pc, timeoutMs = 2500) {
 }
 
 // WebRTC 配置：公网部署（如 Vercel 静态托管）时，跨网络直连需要 STUN
-// 获取公网候选地址并写入邀请码/应答码；局域网直连不受影响
-const RTC_CONFIG = {
-    iceServers: [
-        { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }
-    ]
-};
+// 谷歌 STUN 在部分网络（尤其国内）不可达且静默失败；混合多家提高候选收集成功率。
+// 同局域网若路由器禁 mDNS 多播，浏览器的 .local 本地候选无法互相解析，
+// 此时必须依赖 STUN 反射候选 + NAT 回环才能连通——这是"同一WiFi却加不进去"的主因
+const ICE_SERVERS = [
+    { urls: 'stun:stun.qq.com:3478' },
+    { urls: 'stun:stun.miwifi.com:3478' },
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' }
+];
+const RTC_CONFIG = { iceServers: ICE_SERVERS };
+// PeerJS 实例统一配置（信令走 PeerJS 云，ICE 用上面的混合 STUN）
+const PEER_OPTS = { debug: 0, config: { iceServers: ICE_SERVERS, iceCandidatePoolSize: 4 } };
 
 // 房主：生成一份邀请码（每个访客一份）
 async function hostCreateInvite() {
@@ -201,7 +207,7 @@ function lobbyTryBecomeDirector() {
         if (!window.Peer) return resolve(false);
         let settled = false;
         const done = won => { if (!settled) { settled = true; resolve(won); } };
-        const peer = new Peer(LOBBY_ID, { debug: 0 });
+        const peer = new Peer(LOBBY_ID, PEER_OPTS);
         peer.on('open', () => {
             Lobby.peer = peer;
             Lobby.rooms = Lobby.rooms || new Map();
@@ -229,7 +235,7 @@ function lobbyGetPeer() {
     }
     return new Promise((resolve, reject) => {
         let settled = false;
-        const peer = new Peer({ debug: 0 });
+        const peer = new Peer(PEER_OPTS);
         peer.on('open', () => {
             if (settled) return;
             settled = true;
@@ -350,6 +356,7 @@ function saveRecentRoom(code) {
 // 房主房间信息（注册到房间列表用），startAsHost 时填充
 let hostRoomInfo = null;
 let heartbeatTimer = null;
+let hostKeepaliveTimer = null;
 
 // 房主：注册房间码，等待访客直连
 // 房间码持久化在 localStorage：同一浏览器每次开房用同一个码，方便朋友"最近的房间"一键重连
@@ -368,18 +375,23 @@ function hostStartRoomService() {
     if (saved && !/^[A-Z2-9]{6}$/.test(saved)) saved = null;
 
     let attempts = 0;
-    const tryStart = () => {
+    let healRetries = 0;
+    const tryStart = (preserveCode) => {
         // 首次尝试复用上次的房间码；被占用（撞码/多开）则换新码
-        const code = (attempts === 0 && saved) ? saved : randomRoomCode();
+        // preserveCode=true 表示信令自愈重建：坚持抢回原码（朋友手里的码不作废）
+        const code = ((attempts === 0 || preserveCode) && saved) ? saved : randomRoomCode();
         attempts++;
-        const peer = new Peer(ROOM_PREFIX + code, { debug: 0 });
+        const peer = new Peer(ROOM_PREFIX + code, PEER_OPTS);
         peer.on('open', () => {
             hostPeer = peer;
+            healRetries = 0;
+            window.__cfHostPeer = peer; // 调试/诊断句柄
             codeEl.textContent = code;
             statusEl.textContent = I18N.t('lb.shareCode');
             try { localStorage.setItem(HOST_CODE_KEY, code); } catch (e) {}
             if (hostRoomInfo) hostRoomInfo.code = code;
             // 公开房间：立即注册并开始心跳（同时驱动目录换代后的重新注册）
+            if (heartbeatTimer) clearInterval(heartbeatTimer);
             if (hostRoomInfo && hostRoomInfo.isPublic) {
                 const beat = () => {
                     lobbyRegisterRoom({
@@ -413,9 +425,18 @@ function hostStartRoomService() {
             try { peer.reconnect(); } catch (e) {}
         });
         peer.on('error', err => {
-            if (err.type === 'unavailable-id' && attempts < 4) {
+            if (err.type === 'unavailable-id') {
                 try { peer.destroy(); } catch (e) {}
-                tryStart(); // 房间码撞车（或本机多开），换一个重试
+                if (preserveCode && healRetries < 2) {
+                    // 自愈重建撞码：先试着抢回原码（服务器可能残留旧会话）
+                    healRetries++;
+                    setTimeout(() => tryStart(true), 5000);
+                } else if (attempts < 8) {
+                    // 原码抢不回（信令云占用释放很慢）或初次开房撞码：
+                    // 果断换新码，尽快恢复"可被加入"状态；新码会随心跳更新到房间列表
+                    saved = null;
+                    tryStart();
+                }
             } else if (!hostPeer) {
                 codeEl.textContent = I18N.t('lb.unavailable');
                 statusEl.textContent = I18N.t('lb.peerConnFail');
@@ -423,6 +444,22 @@ function hostStartRoomService() {
         });
     };
     tryStart();
+
+    // 信令保活：PeerJS 掉线会让新玩家凭码加入失败（已建立的对局不受影响）。
+    // 每 8s 体检一次：断开先 reconnect；实例被销毁则用原码整体重建
+    if (hostKeepaliveTimer) clearInterval(hostKeepaliveTimer);
+    hostKeepaliveTimer = setInterval(() => {
+        if (!hostPeer) return;
+        if (hostPeer.destroyed) {
+            try { saved = localStorage.getItem(HOST_CODE_KEY); } catch (e) {}
+            hostPeer = null;
+            attempts = 0;
+            healRetries = 0;
+            tryStart(true);
+        } else if (hostPeer.disconnected) {
+            try { hostPeer.reconnect(); } catch (e) {}
+        }
+    }, 8000);
 }
 
 // 访客：把 PeerJS DataConnection 包装成 WebSocket 风格接口
@@ -447,43 +484,82 @@ function joinRoomWithCode(code, cb) {
         cb.fail(I18N.t('lb.peerLoadFail'));
         return;
     }
+    const MAX_TRIES = 3;
     let settled = false;
+    let tries = 0;
     const fail = msg => {
         if (settled) return;
         settled = true;
+        clearTimeout(overallTimer);
         cb.fail(msg);
         try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
         guestPeer = null;
     };
-    const timer = setTimeout(() => fail(I18N.t('lb.connTimeout')), 15000);
-
-    try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
-    const peer = new Peer({ debug: 0 });
-    guestPeer = peer;
-    peer.on('open', () => {
-        // raw 序列化：数据原样走 DataChannel，与游戏二进制/JSON 协议完全一致
-        const conn = peer.connect(ROOM_PREFIX + code, { reliable: true, serialization: 'raw' });
-        conn.on('open', () => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            saveRecentRoom(code);
-            cb.success();
-            window.createGameTransport = () => createPeerConnTransport(conn);
-            window.game.joinGame();
-        });
-        conn.on('error', () => fail(I18N.t('lb.connFail')));
-    });
-    peer.on('error', err => {
-        clearTimeout(timer);
-        if (err.type === 'peer-unavailable') {
-            fail(I18N.t('lb.roomNotFound'));
-        } else if (err.type === 'network' || err.type === 'server-error') {
-            fail(I18N.t('lb.peerConnFail'));
+    const overallTimer = setTimeout(() => fail(I18N.t('lb.connTimeout')), 30000);
+    // 单次失败先重试再报错：信令云抖动/首轮打洞失败很常见，换个实例重连大多能成
+    const retryOr = msgFn => {
+        if (settled) return;
+        try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
+        guestPeer = null;
+        if (tries < MAX_TRIES) {
+            cb.status(I18N.t('lb.retrying', { n: tries }));
+            setTimeout(attempt, 400);
         } else {
-            fail(I18N.t('lb.connFailPrefix') + (err.type || err.message || I18N.t('lb.unknownErr')));
+            fail(msgFn());
         }
-    });
+    };
+    const attempt = () => {
+        if (settled) return;
+        tries++;
+        try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
+        const peer = new Peer(PEER_OPTS);
+        guestPeer = peer;
+        // 单次尝试 9s 上限：信令或打洞卡住时尽快进入下一轮
+        const attemptTimer = setTimeout(() => retryOr(() => I18N.t('lb.connTimeout')), 9000);
+        peer.on('open', () => {
+            // raw 序列化：数据原样走 DataChannel，与游戏二进制/JSON 协议完全一致
+            const conn = peer.connect(ROOM_PREFIX + code, { reliable: true, serialization: 'raw' });
+            // ICE 失败快速检测：mDNS 被禁/STUN 全挂时 state 会进 failed，立即重试
+            const iceWatch = setInterval(() => {
+                if (settled || guestPeer !== peer) { clearInterval(iceWatch); return; }
+                const pc = conn.peerConnection;
+                if (pc && (pc.iceConnectionState === 'failed' || pc.connectionState === 'failed')) {
+                    clearInterval(iceWatch);
+                    clearTimeout(attemptTimer);
+                    retryOr(() => I18N.t('lb.connFail'));
+                }
+            }, 500);
+            conn.on('open', () => {
+                if (settled) return;
+                settled = true;
+                clearInterval(iceWatch);
+                clearTimeout(attemptTimer);
+                clearTimeout(overallTimer);
+                saveRecentRoom(code);
+                cb.success();
+                window.createGameTransport = () => createPeerConnTransport(conn);
+                window.game.joinGame();
+            });
+            conn.on('error', () => {
+                clearInterval(iceWatch);
+                clearTimeout(attemptTimer);
+                retryOr(() => I18N.t('lb.connFail'));
+            });
+        });
+        peer.on('error', err => {
+            if (settled) return;
+            clearTimeout(attemptTimer);
+            if (err.type === 'peer-unavailable') {
+                // 房间确实不存在（码错/已过期），重试无意义直接报错
+                fail(I18N.t('lb.roomNotFound'));
+            } else if (err.type === 'network' || err.type === 'server-error') {
+                retryOr(() => I18N.t('lb.peerConnFail'));
+            } else {
+                retryOr(() => I18N.t('lb.connFailPrefix') + (err.type || err.message || I18N.t('lb.unknownErr')));
+            }
+        });
+    };
+    attempt();
 }
 
 // 访客：凭房间码直接加入（输码入口）
