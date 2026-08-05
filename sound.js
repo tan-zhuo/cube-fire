@@ -128,6 +128,20 @@ class SoundFX {
         this.noise(0.02, 4000, 2500, 0.08, 0, 'highpass');
     }
 
+    streak(level = 2) { // 连杀号角：级别越高音阶越长越亮
+        const base = [392, 494, 587, 740, 880, 1109]; // G4 B4 D5 F#5 A5 C#6
+        const n = Math.min(base.length, 1 + level);
+        for (let i = 0; i < n; i++) {
+            this.tone('triangle', base[i], base[i], 0.13, 0.30, i * 0.07);
+        }
+        if (level >= 5) this.noise(0.3, 5000, 1200, 0.15, n * 0.07, 'highpass');
+    }
+
+    streakEnd() { // 连杀被终结：下行短叹
+        this.tone('triangle', 660, 660, 0.1, 0.28);
+        this.tone('triangle', 440, 440, 0.16, 0.26, 0.1);
+    }
+
     grenadeThrow(vol = 1) { // 投掷：轻抛滑音 + 保险片脆响
         this.tone('sine', 300, 520, 0.12, 0.18 * vol);
         this.noise(0.03, 5000, 2500, 0.10 * vol, 0, 'highpass');

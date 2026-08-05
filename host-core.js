@@ -922,6 +922,8 @@ class Player {
         // 手雷
         this.grenades = GRENADE.carry;
         this.lastGrenade = 0;
+        // 连杀计数
+        this.streak = 0;
         this.meleeCooldown = GAME_CONFIG.MELEE_COOLDOWN; // 近战攻击冷却时间
         this.team = 0; // 0=无队伍（个人混战），1=红队，2=蓝队
         this.color = PLAYER_COLORS[(id - 1) % PLAYER_COLORS.length]; // 根据ID分配颜色（分队模式下由applyTeamColor覆盖）
@@ -1238,6 +1240,7 @@ class Player {
             if (wasAlive && !hitPlayer.isAlive) {
                 // 击杀
                 this.score = Math.min(65535, (this.score || 0) + 100);
+                registerKill(this, hitPlayer);
                 // 添加击杀信息
                 const killInfo = {
                     killer: this.nickname,
@@ -2963,6 +2966,31 @@ function checkPowerupPickup() {
     });
 }
 
+// 连杀登记：击杀者连杀+1（≥2播报），被击杀者连杀清零（≥3被终结时播报）
+function registerKill(shooter, victim) {
+    if (!shooter || !victim) return;
+    if ((victim.streak | 0) >= 3) {
+        broadcast({
+            type: 'streakEnd',
+            by: shooter.nickname,
+            name: victim.nickname,
+            streak: victim.streak,
+            timestamp: Date.now()
+        });
+    }
+    victim.streak = 0;
+    shooter.streak = (shooter.streak | 0) + 1;
+    if (shooter.streak >= 2) {
+        broadcast({
+            type: 'killstreak',
+            playerId: shooter.id,
+            name: shooter.nickname,
+            streak: shooter.streak,
+            timestamp: Date.now()
+        });
+    }
+}
+
 // 对单个玩家结算伤害（含击杀计分与播报），供子弹直击与爆炸复用
 function applyDamageTo(player, damage, shooterId, weaponName) {
     const shooter = gameState.players.get(shooterId);
@@ -2972,6 +3000,7 @@ function applyDamageTo(player, damage, shooterId, weaponName) {
     if (shooter) {
         if (wasAlive && !player.isAlive) {
             shooter.score = Math.min(65535, (shooter.score || 0) + 100);
+            registerKill(shooter, player);
             const killInfo = {
                 killer: shooter.nickname,
                 victim: player.nickname,
@@ -3176,6 +3205,7 @@ function resetGameState() {
     gameState.players.forEach(player => {
         player.health = GAME_CONFIG.MAX_HEALTH;
         player.score = 0;
+        player.streak = 0;
         player.isAlive = true;
         player.respawnTime = 0;
         player.respawn();

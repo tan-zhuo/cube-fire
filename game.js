@@ -892,6 +892,9 @@ class GameClient {
             });
         }
 
+        // 触屏控制（虚拟摇杆 + 瞄准开火 + 动作按钮）
+        this.setupTouchControls();
+
         // 表情快捷栏
         const emojiBar = document.getElementById('emojiBar');
         if (emojiBar && chatInput) {
@@ -911,6 +914,109 @@ class GameClient {
         }
     }
 
+    // 触屏方案：左 45% 屏落指出浮动摇杆控制移动；右侧落指按住即朝该方向自动开火，
+    // 拖动改变瞄准方向；死亡时点右侧复活；右下三颗按钮：近战/手雷/换弹
+    setupTouchControls() {
+        this.isTouch = (window.matchMedia && matchMedia('(pointer: coarse)').matches) || 'ontouchstart' in window;
+        this.touchMove = { x: 0, y: 0 };
+        if (!this.isTouch) return;
+
+        const container = document.getElementById('gameContainer');
+        const joyBase = document.getElementById('joyBase');
+        const joyKnob = document.getElementById('joyKnob');
+        if (!container || !joyBase) return;
+        const JOY_R = 42;
+        let joyId = null, joyCenter = null;
+        let aimId = null, aimStart = null;
+
+        const setAim = (dx, dy) => {
+            const me = this.players.get(this.playerId);
+            if (!me) return;
+            const size = (this.gameConfig && this.gameConfig.PLAYER_SIZE) || 20;
+            const len = Math.hypot(dx, dy) || 1;
+            this.mouse.x = me.x + size / 2 + (dx / len) * 140;
+            this.mouse.y = me.y + size / 2 + (dy / len) * 140;
+        };
+
+        container.addEventListener('touchstart', (e) => {
+            if (!this.playerId) return; // 未进入游戏不拦截（大厅正常滚动/点击）
+            let handled = false;
+            for (const t of e.changedTouches) {
+                if (t.target.closest && t.target.closest('.touch-btn, #hudRight, #invitePanel, #inviteToggle')) continue;
+                handled = true;
+                if (t.clientX < window.innerWidth * 0.45 && joyId === null) {
+                    joyId = t.identifier;
+                    joyCenter = { x: t.clientX, y: t.clientY };
+                    joyBase.style.left = (t.clientX - 55) + 'px';
+                    joyBase.style.top = (t.clientY - 55) + 'px';
+                    joyBase.classList.add('active');
+                } else if (aimId === null) {
+                    const me = this.players.get(this.playerId);
+                    if (me && !me.isAlive) { this.respawn(); continue; }
+                    aimId = t.identifier;
+                    aimStart = { x: t.clientX, y: t.clientY };
+                    this.mouseDown = true; // 按住即自动开火（朝当前瞄准方向）
+                }
+            }
+            if (handled) e.preventDefault();
+        }, { passive: false });
+
+        container.addEventListener('touchmove', (e) => {
+            if (!this.playerId) return;
+            for (const t of e.changedTouches) {
+                if (t.identifier === joyId) {
+                    let dx = t.clientX - joyCenter.x;
+                    let dy = t.clientY - joyCenter.y;
+                    const len = Math.hypot(dx, dy);
+                    if (len > JOY_R) { dx = dx / len * JOY_R; dy = dy / len * JOY_R; }
+                    joyKnob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+                    this.touchMove.x = dx / JOY_R;
+                    this.touchMove.y = dy / JOY_R;
+                } else if (t.identifier === aimId) {
+                    const dx = t.clientX - aimStart.x;
+                    const dy = t.clientY - aimStart.y;
+                    if (Math.hypot(dx, dy) > 12) setAim(dx, dy);
+                }
+            }
+            e.preventDefault();
+        }, { passive: false });
+
+        const endTouch = (e) => {
+            for (const t of e.changedTouches) {
+                if (t.identifier === joyId) {
+                    joyId = null;
+                    this.touchMove.x = 0;
+                    this.touchMove.y = 0;
+                    joyKnob.style.transform = 'translate(-50%, -50%)';
+                    joyBase.classList.remove('active');
+                } else if (t.identifier === aimId) {
+                    aimId = null;
+                    this.mouseDown = false;
+                }
+            }
+        };
+        container.addEventListener('touchend', endTouch);
+        container.addEventListener('touchcancel', endTouch);
+
+        // 动作按钮
+        const bind = (id, fn) => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    fn();
+                }, { passive: false });
+            }
+        };
+        bind('tbReload', () => this.sendReload());
+        bind('tbGrenade', () => this.sendGrenade());
+        bind('tbMelee', () => {
+            const me = this.players.get(this.playerId);
+            if (me && me.isAlive) this.meleeAttack();
+        });
+    }
+
     setupUI() {
         // 隐藏登录界面，显示游戏界面
         this.hideLogin = () => {
@@ -921,6 +1027,11 @@ class GameClient {
             document.getElementById('chatroom').classList.remove('hidden');
             const ns = document.getElementById('networkStatus');
             if (ns) ns.classList.remove('hidden');
+            document.body.classList.add('in-game');
+            if (this.isTouch) {
+                const tc = document.getElementById('touchControls');
+                if (tc) tc.classList.remove('hidden');
+            }
             if (window.gameMusic) window.gameMusic.play('battle');
         };
     }
@@ -1156,6 +1267,20 @@ class GameClient {
             case 'chatMessage':
                 this.addChatMessage(message.playerName, message.content, message.playerId);
                 this.setChatBubble(message.playerId, message.content);
+                break;
+
+            case 'killstreak': {
+                const names = { 2: '双杀', 3: '三连杀', 4: '四连杀', 5: '五连杀' };
+                const label = message.streak <= 5 ? names[message.streak] : `超神·${message.streak}连杀`;
+                const mine = message.playerId === this.playerId;
+                this.showStreakBanner(`${message.name} ${label}！`, message.streak >= 5 ? 'god' : mine ? 'mine' : '');
+                if (window.gameSound) window.gameSound.streak(Math.min(6, message.streak));
+                break;
+            }
+
+            case 'streakEnd':
+                this.showStreakBanner(`${message.by} 终结了 ${message.name} 的 ${message.streak} 连杀`, 'end');
+                if (window.gameSound) window.gameSound.streakEnd();
                 break;
 
             case 'explosion': {
@@ -1797,6 +1922,16 @@ class GameClient {
         } else {
             p.reloadEnd = 0;
         }
+    }
+
+    // 连杀播报横幅（昵称为用户输入，textContent 防 XSS）
+    showStreakBanner(text, cls = '') {
+        const el = document.getElementById('streakBanner');
+        if (!el) return;
+        el.textContent = text;
+        el.className = 'show' + (cls ? ' ' + cls : '');
+        clearTimeout(this._streakBannerTimer);
+        this._streakBannerTimer = setTimeout(() => { el.className = ''; }, 2600);
     }
 
     // 弹药 HUD（每帧刷新）
@@ -2695,9 +2830,21 @@ class GameClient {
             dx *= inv;
             dy *= inv;
         }
-        
+
+        // 触屏摇杆：矢量输入（模长已 ≤1），覆盖键盘
+        if (this.touchMove && (Math.abs(this.touchMove.x) > 0.14 || Math.abs(this.touchMove.y) > 0.14)) {
+            dx = this.touchMove.x * speed;
+            dy = this.touchMove.y * speed;
+        }
+
         // 计算角度（无论是否移动都要更新）
         const playerSize = this.gameConfig.PLAYER_SIZE || 20;
+
+        // 触屏且未按开火时，朝向跟随移动方向
+        if (this.isTouch && !this.mouseDown && (dx || dy)) {
+            this.mouse.x = player.x + playerSize / 2 + (dx / speed) * 140;
+            this.mouse.y = player.y + playerSize / 2 + (dy / speed) * 140;
+        }
         const angle = Math.atan2(this.mouse.y - (player.y + playerSize / 2), 
                                this.mouse.x - (player.x + playerSize / 2));
         

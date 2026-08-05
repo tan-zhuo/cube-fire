@@ -436,29 +436,18 @@ function createPeerConnTransport(conn) {
     return t;
 }
 
-// 访客：凭房间码直接加入
-function guestJoinByCode() {
-    const statusEl = $('guestStatus');
-    if (!requireNickname()) return;
-    const code = $('roomCodeInput').value.trim().toUpperCase().replace(/\s/g, '');
-    if (code.length !== 6) {
-        showError(statusEl, '请输入 6 位房间码');
-        return;
-    }
+// 凭房间码建立连接并进入游戏（核心逻辑，供输码加入与快速开战复用）
+// cb: { status(msg), fail(msg), success() }
+function joinRoomWithCode(code, cb) {
     if (!window.Peer) {
-        showError(statusEl, '房间码服务加载失败（可能无网络），请使用下方手动邀请码');
+        cb.fail('房间码服务加载失败（可能无网络），请使用下方手动邀请码');
         return;
     }
-    const btn = $('joinByCodeButton');
-    btn.disabled = true;
-    statusEl.style.color = '';
-    statusEl.textContent = '正在连接房间...';
     let settled = false;
     const fail = msg => {
         if (settled) return;
         settled = true;
-        btn.disabled = false;
-        showError(statusEl, msg);
+        cb.fail(msg);
         try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
         guestPeer = null;
     };
@@ -475,7 +464,7 @@ function guestJoinByCode() {
             settled = true;
             clearTimeout(timer);
             saveRecentRoom(code);
-            statusEl.textContent = '连接成功，正在进入游戏...';
+            cb.success();
             window.createGameTransport = () => createPeerConnTransport(conn);
             window.game.joinGame();
         });
@@ -490,6 +479,54 @@ function guestJoinByCode() {
         } else {
             fail('连接失败: ' + (err.type || err.message || '未知错误'));
         }
+    });
+}
+
+// 访客：凭房间码直接加入（输码入口）
+function guestJoinByCode() {
+    const statusEl = $('guestStatus');
+    if (!requireNickname()) return;
+    const code = $('roomCodeInput').value.trim().toUpperCase().replace(/\s/g, '');
+    if (code.length !== 6) {
+        showError(statusEl, '请输入 6 位房间码');
+        return;
+    }
+    const btn = $('joinByCodeButton');
+    btn.disabled = true;
+    statusEl.style.color = '';
+    statusEl.textContent = '正在连接房间...';
+    joinRoomWithCode(code, {
+        status(msg) { statusEl.textContent = msg; },
+        fail(msg) { btn.disabled = false; showError(statusEl, msg); },
+        success() { statusEl.textContent = '连接成功，正在进入游戏...'; }
+    });
+}
+
+// 快速开战：自动加入人最多的公开房，没有就开新房带机器人
+async function quickPlay() {
+    if (!requireNickname()) return;
+    const btn = $('quickPlayButton');
+    if (btn) btn.disabled = true;
+    const done = () => { if (btn) btn.disabled = false; };
+    const fallbackHost = () => {
+        window.showToast('暂无公开房间，为你开新房并召唤机器人', 'info');
+        startAsHost();
+        setTimeout(() => {
+            for (let i = 0; i < 3; i++) window.GameHost.addBot();
+        }, 400);
+        done();
+    };
+    if (!window.Peer) { fallbackHost(); return; }
+    window.showToast('正在寻找对局...', 'info');
+    let rooms = [];
+    try { rooms = await lobbyFetchRooms(); } catch (e) {}
+    rooms = (rooms || []).sort((a, b) => (b.players || 0) - (a.players || 0));
+    if (!rooms.length) { fallbackHost(); return; }
+    const target = rooms[0];
+    joinRoomWithCode(target.code, {
+        status() {},
+        fail() { window.showToast('加入房间失败，为你开新房', 'warn'); fallbackHost(); },
+        success() { done(); }
     });
 }
 
@@ -939,6 +976,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 模式选择
+    $('quickPlayButton').addEventListener('click', quickPlay);
     $('createRoomButton').addEventListener('click', startAsHost);
     $('joinRoomButton').addEventListener('click', () => {
         $('modeButtons').classList.add('hidden');
