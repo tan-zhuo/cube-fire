@@ -9,6 +9,7 @@ const MESSAGE_TYPES = {
     CHAT: 6,
     PING: 7,
     RELOAD: 8,
+    GRENADE: 9,
 
     // 服务器发送
     JOINED: 10,
@@ -293,6 +294,7 @@ class Effect {
         this.weapon = opts.weapon || 'rifle';
         this.color = opts.color || '#fbbf24';
         this.label = opts.label || '';
+        this.radius = opts.radius || 90;
         this.startTime = Date.now();
         this.particles = [];
         this.createParticles();
@@ -308,6 +310,7 @@ class Effect {
                 if (this.weapon === 'shotgun') { count = 13; cone = 1.05; }
                 else if (this.weapon === 'smg') { count = 5; cone = 0.5; }
                 else if (this.weapon === 'sniper') { count = 8; cone = 0.28; speedMul = 1.7; }
+                else if (this.weapon === 'rpg') { count = 11; cone = 0.85; speedMul = 1.2; }
                 for (let i = 0; i < count; i++) {
                     const a = dir + (Math.random() - 0.5) * cone;
                     const speed = (2.5 + Math.random() * 3.5) * speedMul;
@@ -325,6 +328,35 @@ class Effect {
                     Math.cos(dir) * 0.5, Math.sin(dir) * 0.5,
                     '#ffffff', 6, this.weapon === 'shotgun' ? 4 : 3
                 ));
+                break;
+            }
+            case 'explosion': {
+                // 爆炸：火球碎片 + 缓慢升腾的烟雾（冲击环与白闪在 draw 中绘制）
+                const fireColors = ['#fff6d5', '#ffd27f', '#ff9c42', '#ff6b35', '#f2495c'];
+                for (let i = 0; i < 20; i++) {
+                    const a = Math.random() * Math.PI * 2;
+                    const speed = 1.5 + Math.random() * 5;
+                    this.particles.push(new Particle(
+                        this.x, this.y,
+                        Math.cos(a) * speed,
+                        Math.sin(a) * speed,
+                        fireColors[(Math.random() * fireColors.length) | 0],
+                        14 + ((Math.random() * 16) | 0),
+                        2 + Math.random() * 3
+                    ));
+                }
+                for (let i = 0; i < 10; i++) {
+                    const a = Math.random() * Math.PI * 2;
+                    const speed = 0.4 + Math.random() * 1.2;
+                    this.particles.push(new Particle(
+                        this.x, this.y,
+                        Math.cos(a) * speed,
+                        Math.sin(a) * speed - 0.5,
+                        '#5b6470',
+                        30 + ((Math.random() * 22) | 0),
+                        3 + Math.random() * 3.5
+                    ));
+                }
                 break;
             }
             case 'crate': {
@@ -429,6 +461,30 @@ class Effect {
 
     draw(ctx) {
         this.particles.forEach(particle => particle.draw(ctx));
+
+        // 爆炸附加表现：白闪 + 冲击波环扩散到爆炸半径
+        if (this.type === 'explosion') {
+            const p = Math.min(1, (Date.now() - this.startTime) / this.duration);
+            ctx.save();
+            if (p < 0.12) {
+                ctx.globalAlpha = (1 - p / 0.12) * 0.85;
+                ctx.fillStyle = '#fff8ec';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius * 0.45, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            if (p < 0.55) {
+                const rp = p / 0.55;
+                const ringR = this.radius * (0.25 + 0.75 * (1 - Math.pow(1 - rp, 2)));
+                ctx.globalAlpha = (1 - rp) * 0.7;
+                ctx.strokeStyle = '#ffd9a0';
+                ctx.lineWidth = 3.5 * (1 - rp) + 1;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, ringR, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
 
         // 开箱附加表现：扩散光环 + 内容名浮字
         if (this.type === 'crate') {
@@ -610,6 +666,11 @@ class GameClient {
             // R 键换弹
             if ((e.key === 'r' || e.key === 'R') && this.playerId) {
                 this.sendReload();
+            }
+
+            // G 键投掷手雷
+            if ((e.key === 'g' || e.key === 'G') && this.playerId) {
+                this.sendGrenade();
             }
         });
 
@@ -836,6 +897,20 @@ class GameClient {
                 this.addChatMessage(message.playerName, message.content);
                 break;
 
+            case 'explosion': {
+                // 爆炸：视效 + 声音 + 距离衰减震屏
+                this.effects.push(new Effect(message.x, message.y, 'explosion', 750, {
+                    radius: message.radius || 90
+                }));
+                if (window.gameSound) window.gameSound.explosion(this.volFor(message.x, message.y));
+                const me = this.players.get(this.playerId);
+                if (me && typeof me.x === 'number') {
+                    const d = Math.hypot(me.x - message.x, me.y - message.y);
+                    this.addShake(Math.max(2, 13 - d / 45));
+                }
+                break;
+            }
+
             case 'pong': {
                 // 服务器返回pong（JSON），更新RTT与网络质量
                 const now = Date.now();
@@ -901,6 +976,7 @@ class GameClient {
                     const wMag = decoder.readUint8();
                     const wRes = decoder.readUint8();
                     const wRel = decoder.readUint16();
+                    const wG = decoder.readUint8();
 
                     // 若非快照且未提供昵称，则尝试复用已有昵称
                     if (!isSnapshot) {
@@ -916,7 +992,7 @@ class GameClient {
                             damageBoost: { active: damageActive, endTime: damageActive ? nowForBuffs + defaultBuffMs : 0 }
                         }
                     };
-                    this.applyWeaponNet(pObj, wIdx, wMag, wRes, wRel);
+                    this.applyWeaponNet(pObj, wIdx, wMag, wRes, wRel, wG);
                     players.push(pObj);
                 }
 
@@ -931,7 +1007,8 @@ class GameClient {
                     const vy = decoder.readFloat32();
                     const ownerId = decoder.readUint32();
                     const damage = decoder.readUint8();
-                    bullets.push({ id, x, y, vx, vy, ownerId, damage });
+                    const kind = decoder.readUint8();
+                    bullets.push({ id, x, y, vx, vy, ownerId, damage, kind });
                 }
 
                 // 道具
@@ -1034,6 +1111,7 @@ class GameClient {
                             const wMag = decoder.readUint8();
                             const wRes = decoder.readUint8();
                             const wRel = decoder.readUint16();
+                            const wG = decoder.readUint8();
                             const nowTs = Date.now();
                             const np = {
                                 id,
@@ -1055,7 +1133,7 @@ class GameClient {
                                 serverVx: 0,
                                 serverVy: 0
                             };
-                            this.applyWeaponNet(np, wIdx, wMag, wRes, wRel);
+                            this.applyWeaponNet(np, wIdx, wMag, wRes, wRel, wG);
                             this.players.set(id, np);
                         }
                     } else if (section === 0x02) { // changedPlayers
@@ -1127,7 +1205,8 @@ class GameClient {
                                 const wMag = decoder.readUint8();
                                 const wRes = decoder.readUint8();
                                 const wRel = decoder.readUint16();
-                                this.applyWeaponNet(cur, wIdx, wMag, wRes, wRel);
+                                const wG = decoder.readUint8();
+                                this.applyWeaponNet(cur, wIdx, wMag, wRes, wRel, wG);
                             }
                             this.players.set(id, cur);
                         }
@@ -1140,9 +1219,17 @@ class GameClient {
                             const vx = decoder.readInt16() / 100;
                             const vy = decoder.readInt16() / 100;
                             const ownerId = decoder.readUint32();
+                            const kind = decoder.readUint8();
                             if (!this.bullets.find(b => b.id === id)) {
-                                this.bullets.push({ id, x, y, vx, vy, ownerId, damage: 25 });
-                                if (ownerId !== this.playerId) this.remoteShotFx(x, y, vx, vy, ownerId);
+                                this.bullets.push({ id, x, y, vx, vy, ownerId, damage: 25, kind });
+                                if (ownerId !== this.playerId) {
+                                    if (kind === 2) {
+                                        // 手雷出手：轻抛掷声，不放枪口焰
+                                        if (window.gameSound) window.gameSound.grenadeThrow(this.volFor(x, y) * 0.6);
+                                    } else {
+                                        this.remoteShotFx(x, y, vx, vy, ownerId);
+                                    }
+                                }
                             }
                         }
                     } else if (section === 0x13) { // removedBullets
@@ -1231,6 +1318,7 @@ class GameClient {
                 const wMag = decoder.readUint8();
                 const wRes = decoder.readUint8();
                 const wRel = decoder.readUint16();
+                const wG = decoder.readUint8();
                 const jp = {
                     id,
                     nickname,
@@ -1244,7 +1332,7 @@ class GameClient {
                     team,
                     powerups: { shield: {active:false}, rapidFire:{active:false}, damageBoost:{active:false} }
                 };
-                this.applyWeaponNet(jp, wIdx, wMag, wRes, wRel);
+                this.applyWeaponNet(jp, wIdx, wMag, wRes, wRel, wG);
                 this.players.set(id, jp);
                 this.updateScoreboard();
                 return;
@@ -1425,11 +1513,12 @@ class GameClient {
         return W[this.weaponIdName(idx)] || { name: '步枪', fireRate: 200, magSize: 30, reloadMs: 1500 };
     }
 
-    // 应用来自服务器的武器状态（w=武器索引 mag=弹夹 res=备弹(255=∞) rel=换弹剩余ms）
-    applyWeaponNet(p, w, mag, res, rel) {
+    // 应用来自服务器的武器状态（w=武器索引 mag=弹夹 res=备弹(255=∞) rel=换弹剩余ms g=手雷数）
+    applyWeaponNet(p, w, mag, res, rel, g) {
         p.weapon = w;
         p.mag = mag;
         p.reserve = res;
+        if (g !== undefined) p.grenades = g;
         if (rel > 0) {
             p.reloadEnd = Date.now() + rel;
             p.reloadTotal = this.weaponConf(w).reloadMs || 1500;
@@ -1463,6 +1552,14 @@ class GameClient {
             const total = me.reloadTotal || conf.reloadMs || 1500;
             const pct = Math.max(0, Math.min(100, (1 - (me.reloadEnd - now) / total) * 100));
             fill.style.width = pct + '%';
+        }
+
+        // 手雷数
+        const gEl = document.getElementById('grenadeCount');
+        if (gEl) {
+            const g = me.grenades !== undefined ? me.grenades : 2;
+            gEl.textContent = '×' + g;
+            gEl.parentElement.classList.toggle('empty', g <= 0);
         }
     }
 
@@ -1547,6 +1644,7 @@ class GameClient {
                     localPlayer.mag = serverPlayer.mag;
                     localPlayer.reserve = serverPlayer.reserve;
                     localPlayer.reloadEnd = serverPlayer.reloadEnd || 0;
+                    if (serverPlayer.grenades !== undefined) localPlayer.grenades = serverPlayer.grenades;
                     if (serverPlayer.reloadTotal) localPlayer.reloadTotal = serverPlayer.reloadTotal;
                 }
                 // 合并buff状态，避免全量更新时重置计时
@@ -1614,7 +1712,7 @@ class GameClient {
         if (message.newPlayers) {
             message.newPlayers.forEach(player => {
                 if (player.weapon !== undefined) {
-                    this.applyWeaponNet(player, player.weapon, player.mag, player.reserve, player.reloadRem || 0);
+                    this.applyWeaponNet(player, player.weapon, player.mag, player.reserve, player.reloadRem || 0, player.grenades);
                 }
                 this.players.set(player.id, player);
             });
@@ -1628,7 +1726,7 @@ class GameClient {
                     // 武器状态单独应用（JSON 路径）
                     if (changes.weaponState) {
                         const ws = changes.weaponState;
-                        this.applyWeaponNet(player, ws.w, ws.mag, ws.res, ws.rel);
+                        this.applyWeaponNet(player, ws.w, ws.mag, ws.res, ws.rel, ws.g);
                     }
                     const { weaponState, ...rest } = changes;
                     Object.assign(player, rest);
@@ -2202,9 +2300,26 @@ class GameClient {
         
         // 更新子弹
         this.bullets = this.bullets.filter(bullet => {
+            // 手雷：本地也模拟撞墙/边界停驻，消失由服务器 removedBullets 控制
+            if (bullet.kind === 2) {
+                if (bullet.vx || bullet.vy) {
+                    const nx = bullet.x + bullet.vx;
+                    const ny = bullet.y + bullet.vy;
+                    if (nx <= 6 || nx >= this.canvas.width - 6 ||
+                        ny <= 6 || ny >= this.canvas.height - 6 ||
+                        this.checkTerrainCollisionClient(nx - 3, ny - 3, 6, 6)) {
+                        bullet.vx = 0;
+                        bullet.vy = 0;
+                    } else {
+                        bullet.x = nx;
+                        bullet.y = ny;
+                    }
+                }
+                return true;
+            }
             bullet.x += bullet.vx;
             bullet.y += bullet.vy;
-            
+
             // 检查子弹是否超出边界
             return bullet.x > 0 && bullet.x < this.canvas.width &&
                    bullet.y > 0 && bullet.y < this.canvas.height;
@@ -2384,6 +2499,27 @@ class GameClient {
         this.shoot();
         // 本地预测弹药消耗，让 HUD 即时反馈（服务器状态会覆盖校正）
         if (me.mag !== undefined) me.mag = Math.max(0, me.mag - 1);
+    }
+
+    // G 键投掷手雷（朝准星方向，服务器权威判定）
+    sendGrenade() {
+        const me = this.players.get(this.playerId);
+        if (!me || !me.isAlive || !this.ws) return;
+        const now = Date.now();
+        if (now - (this.lastGrenadeSent || 0) < 1000) return;
+        if ((me.grenades | 0) <= 0) {
+            this.lastGrenadeSent = now;
+            if (window.gameSound) window.gameSound.emptyClick();
+            return;
+        }
+        this.lastGrenadeSent = now;
+        const enc = new BinaryEncoder().init(24);
+        enc.writeUint8(MESSAGE_TYPES.GRENADE);
+        enc.writeFloat32(this.mouse.x);
+        enc.writeFloat32(this.mouse.y);
+        this.ws.send(enc.getBuffer());
+        me.grenades = Math.max(0, (me.grenades | 0) - 1); // 本地预测
+        if (window.gameSound) window.gameSound.grenadeThrow(1);
     }
 
     sendReload() {
@@ -2796,6 +2932,12 @@ class GameClient {
             this.backCtx.fillRect(size / 2 - 2, -1.5, 17, 3);
             this.backCtx.fillStyle = '#38bdf8';
             this.backCtx.fillRect(size / 2 + 3, -4.5, 4.5, 2.5);
+        } else if (wIdx === 4) {
+            // 火箭筒：粗发射管 + 喇叭口
+            this.backCtx.fillStyle = '#4d5b45';
+            this.backCtx.fillRect(size / 2 - 4, -3.5, 13, 7);
+            this.backCtx.fillStyle = '#333d2e';
+            this.backCtx.fillRect(size / 2 + 9, -4.5, 3.5, 9);
         } else {
             // 步枪：默认枪管
             this.backCtx.fillRect(size / 2 - 2, -2.5, 9, 5);
@@ -2885,7 +3027,69 @@ class GameClient {
     drawBullet(bullet) {
         const size = this.gameConfig ? this.gameConfig.BULLET_SIZE : 4;
         const time = Date.now();
-        
+
+        // 火箭弹：弹体沿速度方向 + 喷焰尾迹
+        if (bullet.kind === 1) {
+            const ang = Math.atan2(bullet.vy, bullet.vx);
+            const ctx = this.backCtx;
+            ctx.save();
+            // 尾焰（抖动的橙色锥）
+            for (let i = 1; i <= 5; i++) {
+                const fx = bullet.x - Math.cos(ang) * (5 + i * 3.2) + (Math.random() - 0.5) * 2;
+                const fy = bullet.y - Math.sin(ang) * (5 + i * 3.2) + (Math.random() - 0.5) * 2;
+                ctx.globalAlpha = (6 - i) / 6 * 0.75;
+                ctx.fillStyle = i <= 2 ? '#ffd27f' : '#ff8c42';
+                ctx.beginPath();
+                ctx.arc(fx, fy, 3.4 - i * 0.5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            // 弹体
+            ctx.globalAlpha = 1;
+            ctx.translate(bullet.x, bullet.y);
+            ctx.rotate(ang);
+            ctx.fillStyle = '#4a5568';
+            ctx.fillRect(-6, -2.5, 10, 5);
+            ctx.fillStyle = '#f2495c';
+            ctx.beginPath();
+            ctx.moveTo(4, -2.5);
+            ctx.lineTo(9, 0);
+            ctx.lineTo(4, 2.5);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+            return;
+        }
+
+        // 手雷：深色弹体 + 引信红灯闪烁
+        if (bullet.kind === 2) {
+            const ctx = this.backCtx;
+            ctx.save();
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+            ctx.beginPath();
+            ctx.ellipse(bullet.x, bullet.y + 5, 4.5, 2, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#3f4a35';
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(bullet.x, bullet.y, 4.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = '#79866a';
+            ctx.fillRect(bullet.x - 1.5, bullet.y - 6.5, 3, 3);
+            // 引信灯（越接近爆炸闪得越快）
+            if (Math.sin(time * 0.03) > -0.2) {
+                ctx.fillStyle = '#ff5d5d';
+                ctx.shadowColor = '#ff5d5d';
+                ctx.shadowBlur = 6;
+                ctx.beginPath();
+                ctx.arc(bullet.x, bullet.y - 5, 1.4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.restore();
+            return;
+        }
+
         this.backCtx.save();
         
         // 绘制子弹尾迹

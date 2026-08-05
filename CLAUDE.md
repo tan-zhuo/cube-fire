@@ -38,9 +38,10 @@ CUBEFIRE·立方火线：多人局域网2.5D俯视角射击游戏，支持两种
 ### 武器与弹药系统
 - `WEAPONS`武器表定义在`server.js`/`host-core.js`（两份需一致），经`JOINED`消息的配置JSON下发给客户端：rifle步枪(默认,备弹无限)/smg冲锋枪/shotgun霰弹枪(6弹丸扇形,短射程用短life实现)/sniper狙击枪
 - Player新增字段：`weapon/mag/reserve(-1=无限)/reloading/reloadEnd`；空仓自动换弹、备弹耗尽自动回步枪、复活重置步枪；`RELOAD`(=8)为客户端消息类型
-- 协议：玩家增量更新bitmask新增`0x80`=武器状态（weapon uint8 + mag uint8 + reserve uint8(255=无限) + reloadRem uint16 ms）；newPlayers/playerJoined/全量状态在team字节后追加同样4个字段，改动时三个文件需同步
-- 道具改为道具箱：`POWERUP_TYPES`新增weapon_smg/weapon_shotgun/weapon_sniper（typeId 5/6/7），45%武器箱/55%增益箱，客户端渲染为2.5D悬浮箱、内容拾取时揭示
-- 聊天命令`/weapon 武器ID`立即换枪
+- 协议：玩家增量更新bitmask新增`0x80`=武器状态（weapon uint8 + mag uint8 + reserve uint8(255=无限) + reloadRem uint16 ms + grenades uint8）；newPlayers/playerJoined/全量状态在team字节后追加同样5个字段；子弹（newBullets与全量）尾部追加kind uint8(0=子弹 1=火箭弹 2=手雷)，改动时三个文件需同步
+- 爆炸系统：`explodeAt`范围伤害衰减（中心全额→边缘35%），不伤投掷者与队友；`explosion`消息走JSON广播{x,y,radius}；火箭弹撞墙/命中/超时爆炸，手雷（GRENADE=9消息，G键）飞抵落点或撞墙停驻后引信起爆
+- 道具改为道具箱：`POWERUP_TYPES`新增weapon_smg/shotgun/sniper/rpg与grenade_pack（typeId 5-9），50%武器箱/50%增益箱，客户端渲染为2.5D悬浮箱、内容拾取时揭示
+- 聊天命令`/weapon 武器ID`立即换枪；JOINED配置JSON含WEAPONS表（encodeJoined缓冲4096）
 
 ### 游戏状态管理
 服务器维护全局游戏状态：

@@ -105,6 +105,11 @@ class SoundFX {
                 this.noise(0.35, 2200, 150, 0.4 * vol);
                 this.tone('sawtooth', 900, 90, 0.22, 0.22 * vol);
                 break;
+            case 'rpg': // 火箭发射：低沉喷射轰鸣
+                this.noise(0.30, 900, 120, 0.5 * vol);
+                this.tone('sawtooth', 140, 60, 0.28, 0.30 * vol);
+                this.noise(0.10, 3000, 800, 0.2 * vol, 0, 'highpass');
+                break;
             default: // 步枪
                 this.noise(0.09, 3200, 400, 0.42 * vol);
                 this.tone('square', 620, 160, 0.08, 0.16 * vol);
@@ -121,6 +126,17 @@ class SoundFX {
     emptyClick() { // 空仓击锤
         this.tone('square', 520, 380, 0.03, 0.16);
         this.noise(0.02, 4000, 2500, 0.08, 0, 'highpass');
+    }
+
+    grenadeThrow(vol = 1) { // 投掷：轻抛滑音 + 保险片脆响
+        this.tone('sine', 300, 520, 0.12, 0.18 * vol);
+        this.noise(0.03, 5000, 2500, 0.10 * vol, 0, 'highpass');
+    }
+
+    explosion(vol = 1) { // 爆炸：重低频轰 + 碎响长尾
+        this.noise(0.5, 700, 50, 0.65 * vol);
+        this.tone('sine', 90, 32, 0.42, 0.5 * vol);
+        this.noise(0.28, 4500, 500, 0.22 * vol, 0.02, 'highpass');
     }
 
     hitConfirm() { // 命中反馈（打中别人）

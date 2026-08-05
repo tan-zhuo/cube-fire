@@ -1011,6 +1011,24 @@
             background: var(--accent);
         }
 
+        .grenade-line {
+            margin-top: 7px;
+            font-size: 11.5px;
+            letter-spacing: 1px;
+            color: var(--text-mid);
+            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+        }
+
+        .grenade-line span {
+            font-family: var(--mono);
+            font-weight: 700;
+            color: #a3e635;
+        }
+
+        .grenade-line.empty span {
+            color: var(--text-low);
+        }
+
         /* 底部中央：操作提示（极简浮动文字） */
         #instructions {
             align-self: flex-end;
@@ -1762,7 +1780,7 @@
             </div>
 
             <div id="instructions" class="hidden">
-                <span class="keycap">WASD</span> 移动&nbsp;&nbsp;<span class="keycap">左键</span> 射击&nbsp;&nbsp;<span class="keycap">右键</span> 近战&nbsp;&nbsp;<span class="keycap">R</span> 换弹&nbsp;&nbsp;<span class="keycap">空格</span> 复活&nbsp;&nbsp;<span class="keycap">M</span> 静音
+                <span class="keycap">WASD</span> 移动&nbsp;&nbsp;<span class="keycap">左键</span> 射击&nbsp;&nbsp;<span class="keycap">右键</span> 近战&nbsp;&nbsp;<span class="keycap">R</span> 换弹&nbsp;&nbsp;<span class="keycap">G</span> 手雷&nbsp;&nbsp;<span class="keycap">空格</span> 复活&nbsp;&nbsp;<span class="keycap">M</span> 静音
             </div>
 
             <div class="hud-block hud-right">
@@ -1772,6 +1790,7 @@
                     <span class="ammo-reserve" id="ammoReserve">/ ∞</span>
                 </div>
                 <div class="reload-track hidden" id="reloadTrack"><div class="reload-fill" id="reloadFill"></div></div>
+                <div class="grenade-line">手雷 <span id="grenadeCount">×2</span></div>
             </div>
         </div>
 
@@ -1909,6 +1928,7 @@
                     <span class="control-item"><span class="keycap">左键</span> 射击</span>
                     <span class="control-item"><span class="keycap">右键</span> 近战</span>
                     <span class="control-item"><span class="keycap">R</span> 换弹</span>
+                    <span class="control-item"><span class="keycap">G</span> 手雷</span>
                     <span class="control-item"><span class="keycap">空格</span> 复活</span>
                     <span class="control-item"><span class="keycap">M</span> 静音</span>
                 </div>

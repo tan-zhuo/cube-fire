@@ -80,18 +80,23 @@ const WEAPONS = {
     rifle:   { name: '步枪',   damage: 25, fireRate: 200,  magSize: 30, reloadMs: 1500, pellets: 1, spread: 0,    speed: 10, reserve: -1,  lifeMs: 2000 },
     smg:     { name: '冲锋枪', damage: 12, fireRate: 90,   magSize: 40, reloadMs: 1600, pellets: 1, spread: 0.09, speed: 11, reserve: 80,  lifeMs: 2000 },
     shotgun: { name: '霰弹枪', damage: 11, fireRate: 750,  magSize: 6,  reloadMs: 2200, pellets: 6, spread: 0.34, speed: 9,  reserve: 24,  lifeMs: 450 },
-    sniper:  { name: '狙击枪', damage: 80, fireRate: 1100, magSize: 5,  reloadMs: 2400, pellets: 1, spread: 0,    speed: 12, reserve: 10,  lifeMs: 2000 }
+    sniper:  { name: '狙击枪', damage: 80, fireRate: 1100, magSize: 5,  reloadMs: 2400, pellets: 1, spread: 0,    speed: 12, reserve: 10,  lifeMs: 2000 },
+    rpg:     { name: '火箭筒', damage: 85, fireRate: 1500, magSize: 1,  reloadMs: 2500, pellets: 1, spread: 0,    speed: 7,  reserve: 4,   lifeMs: 2200, kind: 1, blastRadius: 90 }
 };
-const WEAPON_IDS = ['rifle', 'smg', 'shotgun', 'sniper']; // uint8 索引编码
+const WEAPON_IDS = ['rifle', 'smg', 'shotgun', 'sniper', 'rpg']; // uint8 索引编码
 
-// 玩家武器状态的网络快照（w=武器索引 mag=弹夹 res=备弹(255=无限) rel=换弹剩余ms）
+// 手雷参数
+const GRENADE = { blastRadius: 100, blastDamage: 75, speed: 8, maxThrow: 320, fuseMs: 1300, cooldownMs: 1000, carry: 2, carryMax: 4 };
+
+// 玩家武器状态的网络快照（w=武器索引 mag=弹夹 res=备弹(255=无限) rel=换弹剩余ms g=手雷数）
 function weaponNetState(p) {
     const rel = p.reloading ? Math.max(0, p.reloadEnd - Date.now()) : 0;
     return {
         w: Math.max(0, WEAPON_IDS.indexOf(p.weapon)),
         mag: Math.max(0, Math.min(255, p.mag | 0)),
         res: p.reserve < 0 ? 255 : Math.max(0, Math.min(254, p.reserve | 0)),
-        rel: Math.min(65535, rel | 0)
+        rel: Math.min(65535, rel | 0),
+        g: Math.max(0, Math.min(255, p.grenades | 0))
     };
 }
 
@@ -153,6 +158,7 @@ const MESSAGE_TYPES = {
     MOVE: 2,
     SHOOT: 3,
     RELOAD: 8,
+    GRENADE: 9,
     MELEE: 4,
     RESPAWN: 5,
     CHAT: 6,
@@ -244,7 +250,7 @@ class BinaryEncoder {
 
 // 编码加入确认（JOINED）
 function encodeJoined(playerId) {
-    const encoder = new BinaryEncoder().init(1024);
+    const encoder = new BinaryEncoder().init(4096); // 配置JSON含武器表，需要更大缓冲
     encoder.writeUint8(MESSAGE_TYPES.JOINED);
     encoder.writeUint32(playerId);
     // 将gameConfig作为字符串传输，便于扩展；附带当前对局的地图与模式信息
@@ -297,6 +303,7 @@ function encodeIncrementalUpdate(update) {
             enc.writeUint8(p.mag | 0);
             enc.writeUint8(p.reserve === undefined ? 255 : p.reserve);
             enc.writeUint16(p.reloadRem | 0);
+            enc.writeUint8(p.grenades === undefined ? 2 : p.grenades);
         });
     }
 
@@ -343,6 +350,7 @@ function encodeIncrementalUpdate(update) {
                 enc.writeUint8(c.weaponState.mag | 0);
                 enc.writeUint8(c.weaponState.res | 0);
                 enc.writeUint16(c.weaponState.rel | 0);
+                enc.writeUint8(c.weaponState.g | 0);
             }
         });
     }
@@ -358,6 +366,7 @@ function encodeIncrementalUpdate(update) {
             enc.writeInt16(Math.max(-32768, Math.min(32767, Math.round((b.vx || 0) * 100))));
             enc.writeInt16(Math.max(-32768, Math.min(32767, Math.round((b.vy || 0) * 100))));
             enc.writeUint32(b.ownerId || 0);
+            enc.writeUint8(b.kind | 0);
         });
     }
     
@@ -444,6 +453,7 @@ function encodePlayerJoined(player) {
     enc.writeUint8(player.mag | 0);
     enc.writeUint8(player.reserve === undefined ? 255 : player.reserve);
     enc.writeUint16(player.reloadRem | 0);
+    enc.writeUint8(player.grenades === undefined ? 2 : player.grenades);
     return enc.getBuffer();
 }
 
@@ -611,6 +621,7 @@ function encodeGameStateUpdate(gameState) {
         encoder.writeUint8(ws.mag);
         encoder.writeUint8(ws.res);
         encoder.writeUint16(ws.rel);
+        encoder.writeUint8(ws.g);
     });
 
     // 写入子弹数量和数据
@@ -624,6 +635,7 @@ function encodeGameStateUpdate(gameState) {
         encoder.writeFloat32(bullet.vy);
         encoder.writeUint32(bullet.ownerId);
         encoder.writeUint8(bullet.damage);
+        encoder.writeUint8(bullet.kind | 0);
     });
     
     // 写入道具数量和数据
@@ -683,6 +695,7 @@ function encodeInitialGameState(state) {
         encoder.writeUint8(ws.mag);
         encoder.writeUint8(ws.res);
         encoder.writeUint16(ws.rel);
+        encoder.writeUint8(ws.g);
     });
 
     // 子弹
@@ -695,6 +708,7 @@ function encodeInitialGameState(state) {
         encoder.writeFloat32(bullet.vy);
         encoder.writeUint32(bullet.ownerId);
         encoder.writeUint8(bullet.damage);
+        encoder.writeUint8(bullet.kind | 0);
     });
 
     // 道具（包含颜色和图标，便于渲染）
@@ -753,6 +767,13 @@ function decodeMessage(buffer) {
 
             case MESSAGE_TYPES.RELOAD:
                 return { type: 'reload' };
+
+            case MESSAGE_TYPES.GRENADE:
+                return {
+                    type: 'grenade',
+                    targetX: decoder.readFloat32(),
+                    targetY: decoder.readFloat32()
+                };
                 
             case MESSAGE_TYPES.MELEE:
                 return {
@@ -794,7 +815,9 @@ const POWERUP_TYPES = {
     HEAL: 'heal',
     WEAPON_SMG: 'weapon_smg',
     WEAPON_SHOTGUN: 'weapon_shotgun',
-    WEAPON_SNIPER: 'weapon_sniper'
+    WEAPON_SNIPER: 'weapon_sniper',
+    WEAPON_RPG: 'weapon_rpg',
+    GRENADE_PACK: 'grenade_pack'
 };
 
 // 道具箱类型 → 武器 id（非武器箱返回 null）
@@ -803,6 +826,7 @@ function powerupWeapon(type) {
         case POWERUP_TYPES.WEAPON_SMG: return 'smg';
         case POWERUP_TYPES.WEAPON_SHOTGUN: return 'shotgun';
         case POWERUP_TYPES.WEAPON_SNIPER: return 'sniper';
+        case POWERUP_TYPES.WEAPON_RPG: return 'rpg';
         default: return null;
     }
 }
@@ -895,6 +919,9 @@ class Player {
         this.reserve = -1; // -1 = 无限备弹（步枪）
         this.reloading = false;
         this.reloadEnd = 0;
+        // 手雷
+        this.grenades = GRENADE.carry;
+        this.lastGrenade = 0;
         this.meleeCooldown = GAME_CONFIG.MELEE_COOLDOWN; // 近战攻击冷却时间
         this.team = 0; // 0=无队伍（个人混战），1=红队，2=蓝队
         this.color = PLAYER_COLORS[(id - 1) % PLAYER_COLORS.length]; // 根据ID分配颜色（分队模式下由applyTeamColor覆盖）
@@ -1027,6 +1054,39 @@ class Player {
         this.isAlive = true;
         this.respawnTime = 0;
         this.equipWeapon('rifle'); // 复活重置为默认武器
+        this.grenades = GRENADE.carry;
+    }
+
+    // 投掷手雷：朝目标点飞行，到落点（或撞墙停驻）后由引信起爆
+    throwGrenade(targetX, targetY) {
+        const now = Date.now();
+        if (!this.isAlive || this.grenades <= 0) return null;
+        if (now - (this.lastGrenade || 0) < GRENADE.cooldownMs) return null;
+        this.lastGrenade = now;
+        this.grenades--;
+
+        const cx = this.x + GAME_CONFIG.PLAYER_SIZE / 2;
+        const cy = this.y + GAME_CONFIG.PLAYER_SIZE / 2;
+        let dx = targetX - cx, dy = targetY - cy;
+        let dist = Math.hypot(dx, dy);
+        if (!dist || dist < 1e-3) {
+            dx = Math.cos(this.angle || 0);
+            dy = Math.sin(this.angle || 0);
+            dist = 1;
+        }
+        const throwDist = Math.min(GRENADE.maxThrow, Math.max(60, dist));
+        return new Bullet(
+            cx + (dx / dist) * 14, cy + (dy / dist) * 14,
+            (dx / dist) * GRENADE.speed, (dy / dist) * GRENADE.speed,
+            this.id, 0, GRENADE.fuseMs,
+            {
+                kind: 2,
+                blastRadius: GRENADE.blastRadius,
+                blastDamage: GRENADE.blastDamage,
+                weaponName: '手雷',
+                originX: cx, originY: cy, throwDist
+            }
+        );
     }
 
     takeDamage(damage) {
@@ -1121,7 +1181,8 @@ class Player {
                 Math.sin(a) * w.speed,
                 this.id,
                 damage,
-                w.lifeMs
+                w.lifeMs,
+                w.kind ? { kind: w.kind, blastRadius: w.blastRadius, blastDamage: damage, weaponName: w.name } : undefined
             ));
         }
 
@@ -1229,7 +1290,7 @@ class Player {
 
 // 子弹类
 class Bullet {
-    constructor(x, y, vx, vy, ownerId, damage = 25, lifeMs = 2000) {
+    constructor(x, y, vx, vy, ownerId, damage = 25, lifeMs = 2000, opts = undefined) {
         this.id = Date.now() + Math.random();
         this.x = x;
         this.y = y;
@@ -1239,6 +1300,16 @@ class Bullet {
         this.damage = damage;
         this.life = lifeMs; // 生命周期(毫秒)；霰弹枪较短形成射程限制
         this.createdTime = Date.now();
+        this.kind = 0; // 0=子弹 1=火箭弹 2=手雷
+        if (opts) {
+            this.kind = opts.kind || 0;
+            this.blastRadius = opts.blastRadius;
+            this.blastDamage = opts.blastDamage;
+            this.weaponName = opts.weaponName;
+            this.originX = opts.originX;
+            this.originY = opts.originY;
+            this.throwDist = opts.throwDist;
+        }
     }
 
     update(deltaTime = 16) {
@@ -1278,7 +1349,10 @@ class Powerup {
             case POWERUP_TYPES.WEAPON_SMG:
             case POWERUP_TYPES.WEAPON_SHOTGUN:
             case POWERUP_TYPES.WEAPON_SNIPER:
+            case POWERUP_TYPES.WEAPON_RPG:
                 return '#fbbf24'; // 金色：武器箱
+            case POWERUP_TYPES.GRENADE_PACK:
+                return '#84cc16'; // 橄榄绿：手雷补给
             default:
                 return '#95a5a6'; // 灰色
         }
@@ -1300,6 +1374,10 @@ class Powerup {
                 return '霰';
             case POWERUP_TYPES.WEAPON_SNIPER:
                 return '狙';
+            case POWERUP_TYPES.WEAPON_RPG:
+                return '炮';
+            case POWERUP_TYPES.GRENADE_PACK:
+                return '雷';
             default:
                 return '?';
         }
@@ -1359,7 +1437,8 @@ function addBot() {
             weapon: botWs.w,
             mag: botWs.mag,
             reserve: botWs.res,
-            reloadRem: botWs.rel
+            reloadRem: botWs.rel,
+            grenades: botWs.g
         }
     });
     return true;
@@ -1616,7 +1695,9 @@ function getPowerupTypeId(type) {
         'heal': 4,
         'weapon_smg': 5,
         'weapon_shotgun': 6,
-        'weapon_sniper': 7
+        'weapon_sniper': 7,
+        'weapon_rpg': 8,
+        'grenade_pack': 9
     };
     return typeMap[type] || 0;
 }
@@ -1766,6 +1847,7 @@ function hasPlayerChanged(playerId, currentPlayer) {
         currentPlayer.mag !== lastState.mag ||
         currentPlayer.reserve !== lastState.reserve ||
         currentPlayer.reloading !== lastState.reloading ||
+        currentPlayer.grenades !== lastState.grenades ||
         JSON.stringify(currentPlayer.powerups) !== JSON.stringify(lastState.powerups)
     );
 }
@@ -1859,7 +1941,8 @@ function generateIncrementalUpdate() {
 
                 // 检查武器/弹药变化
                 if (player.weapon !== lastState.weapon || player.mag !== lastState.mag ||
-                    player.reserve !== lastState.reserve || player.reloading !== lastState.reloading) {
+                    player.reserve !== lastState.reserve || player.reloading !== lastState.reloading ||
+                    player.grenades !== lastState.grenades) {
                     changes.weaponState = weaponNetState(player);
                 }
 
@@ -1885,7 +1968,8 @@ function generateIncrementalUpdate() {
                     weapon: ws.w,
                     mag: ws.mag,
                     reserve: ws.res,
-                    reloadRem: ws.rel
+                    reloadRem: ws.rel,
+                    grenades: ws.g
                 });
             }
 
@@ -1901,6 +1985,7 @@ function generateIncrementalUpdate() {
                 mag: player.mag,
                 reserve: player.reserve,
                 reloading: player.reloading,
+                grenades: player.grenades,
                 powerups: JSON.parse(JSON.stringify(player.powerups))
             });
         }
@@ -1921,7 +2006,8 @@ function generateIncrementalUpdate() {
                 y: Math.round(bullet.y * 2) / 2,
                 vx: bullet.vx, // 保持完整速度精度
                 vy: bullet.vy,
-                ownerId: bullet.ownerId
+                ownerId: bullet.ownerId,
+                kind: bullet.kind | 0
             };
             newBullets.push(newBullet);
             console.log(`新子弹已加入newBullets数组，当前数组长度: ${newBullets.length}`);
@@ -2003,7 +2089,8 @@ function generateIncrementalUpdate() {
                 y: Math.round(bullet.y / 2) * 2,
                 vx: Math.round(bullet.vx * 10) / 10,
                 vy: Math.round(bullet.vy * 10) / 10,
-                ownerId: bullet.ownerId
+                ownerId: bullet.ownerId,
+                kind: bullet.kind | 0
             })),
             powerups: gameState.powerups.map(powerup => ({
                 id: powerup.id,
@@ -2252,6 +2339,14 @@ function handleMessage(ws, message) {
             if (rp) rp.startReload();
             break;
         }
+        case 'grenade': {
+            const gp = gameState.players.get(ws.playerId);
+            if (gp) {
+                const g = gp.throwGrenade(message.targetX, message.targetY);
+                if (g) gameState.bullets.push(g);
+            }
+            break;
+        }
         case 'melee':
             handleMelee(ws, message);
             break;
@@ -2431,7 +2526,8 @@ function handleJoin(ws, message) {
             weapon: joinWs.w,
             mag: joinWs.mag,
             reserve: joinWs.res,
-            reloadRem: joinWs.rel
+            reloadRem: joinWs.rel,
+            grenades: joinWs.g
         }
     }, playerId);
     
@@ -2727,13 +2823,13 @@ function spawnPowerup() {
         return;
     }
 
-    // 45% 武器箱 / 55% 增益箱
+    // 50% 武器箱 / 50% 增益箱（含手雷补给）
     let type;
-    if (Math.random() < 0.45) {
-        const weapons = [POWERUP_TYPES.WEAPON_SMG, POWERUP_TYPES.WEAPON_SHOTGUN, POWERUP_TYPES.WEAPON_SNIPER];
+    if (Math.random() < 0.5) {
+        const weapons = [POWERUP_TYPES.WEAPON_SMG, POWERUP_TYPES.WEAPON_SHOTGUN, POWERUP_TYPES.WEAPON_SNIPER, POWERUP_TYPES.WEAPON_RPG];
         type = weapons[Math.floor(Math.random() * weapons.length)];
     } else {
-        const buffs = [POWERUP_TYPES.SHIELD, POWERUP_TYPES.RAPID_FIRE, POWERUP_TYPES.DAMAGE_BOOST, POWERUP_TYPES.HEAL];
+        const buffs = [POWERUP_TYPES.SHIELD, POWERUP_TYPES.RAPID_FIRE, POWERUP_TYPES.DAMAGE_BOOST, POWERUP_TYPES.HEAL, POWERUP_TYPES.GRENADE_PACK];
         type = buffs[Math.floor(Math.random() * buffs.length)];
     }
     
@@ -2844,6 +2940,9 @@ function checkPowerupPickup() {
                             case POWERUP_TYPES.HEAL:
                                 player.health = Math.min(GAME_CONFIG.MAX_HEALTH, player.health + GAME_CONFIG.MAX_HEALTH);
                                 break;
+                            case POWERUP_TYPES.GRENADE_PACK:
+                                player.grenades = Math.min(GRENADE.carryMax, (player.grenades | 0) + 2);
+                                break;
                         }
                     }
                     
@@ -2864,82 +2963,139 @@ function checkPowerupPickup() {
     });
 }
 
+// 对单个玩家结算伤害（含击杀计分与播报），供子弹直击与爆炸复用
+function applyDamageTo(player, damage, shooterId, weaponName) {
+    const shooter = gameState.players.get(shooterId);
+    const wasAlive = player.isAlive;
+    player.takeDamage(damage);
+
+    if (shooter) {
+        if (wasAlive && !player.isAlive) {
+            shooter.score = Math.min(65535, (shooter.score || 0) + 100);
+            const killInfo = {
+                killer: shooter.nickname,
+                victim: player.nickname,
+                weapon: weaponName,
+                timestamp: Date.now()
+            };
+            gameState.killFeed.push(killInfo);
+            broadcast({ type: 'killFeed', killInfo });
+        } else {
+            shooter.score = Math.min(65535, (shooter.score || 0) + 10);
+        }
+    }
+
+    broadcast({
+        type: 'playerHit',
+        targetId: player.id,
+        shooterId: shooterId,
+        damage: damage,
+        isKill: wasAlive && !player.isAlive
+    });
+}
+
+// 范围爆炸：按距离衰减伤害（中心全额→边缘35%），不伤及投掷者与队友
+function explodeAt(x, y, radius, damageBase, shooterId, weaponName) {
+    const shooter = gameState.players.get(shooterId);
+    gameState.players.forEach(player => {
+        if (player.id === shooterId || !player.isAlive || isSameTeam(player, shooter)) return;
+        const dx = (player.x + GAME_CONFIG.PLAYER_SIZE / 2) - x;
+        const dy = (player.y + GAME_CONFIG.PLAYER_SIZE / 2) - y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > radius + GAME_CONFIG.PLAYER_SIZE / 2) return;
+        let damage = Math.max(1, Math.round(damageBase * (1 - 0.65 * Math.min(1, dist / radius))));
+        if (shooter && shooter.powerups.damageBoost && shooter.powerups.damageBoost.active) {
+            damage = Math.floor(damage * 1.5);
+        }
+        applyDamageTo(player, damage, shooterId, weaponName);
+    });
+    broadcast({ type: 'explosion', x: Math.round(x), y: Math.round(y), radius: Math.round(radius) });
+}
+
+function explodeBullet(bullet) {
+    explodeAt(
+        bullet.x, bullet.y,
+        bullet.blastRadius || 90,
+        bullet.blastDamage || bullet.damage || 80,
+        bullet.ownerId,
+        bullet.weaponName || '火箭筒'
+    );
+}
+
 // 子弹碰撞处理函数
 function processBulletCollisions(bullet) {
+    const isRocket = bullet.kind === 1;
+
+    // 手雷：飞抵落点或遇墙/边界即停驻，等 life 引信起爆（不参与碰撞伤害）
+    if (bullet.kind === 2) {
+        if (bullet.vx || bullet.vy) {
+            const traveled = Math.hypot(bullet.x - bullet.originX, bullet.y - bullet.originY);
+            const nextX = bullet.x + bullet.vx;
+            const nextY = bullet.y + bullet.vy;
+            if (traveled >= bullet.throwDist ||
+                nextX <= 6 || nextX >= GAME_CONFIG.CANVAS_WIDTH - 6 ||
+                nextY <= 6 || nextY >= GAME_CONFIG.CANVAS_HEIGHT - 6 ||
+                checkTerrainCollision(nextX - 3, nextY - 3, 6, 6)) {
+                bullet.vx = 0;
+                bullet.vy = 0;
+            }
+        }
+        return true;
+    }
+
     // 检查子弹边界
     if (bullet.x <= 0 || bullet.x >= GAME_CONFIG.CANVAS_WIDTH ||
         bullet.y <= 0 || bullet.y >= GAME_CONFIG.CANVAS_HEIGHT) {
+        if (isRocket) explodeBullet(bullet);
         return false; // 移除子弹
     }
-    
+
     // 检查地形碰撞
     const bulletSize = GAME_CONFIG.BULLET_SIZE;
     const nextX = bullet.x + bullet.vx;
     const nextY = bullet.y + bullet.vy;
-    
+
     if (checkTerrainCollision(nextX - bulletSize / 2, nextY - bulletSize / 2, bulletSize, bulletSize)) {
-        broadcast({
-            type: 'bulletHitWall',
-            x: bullet.x,
-            y: bullet.y,
-            bulletId: bullet.id
-        });
+        if (isRocket) {
+            explodeBullet(bullet);
+        } else {
+            broadcast({
+                type: 'bulletHitWall',
+                x: bullet.x,
+                y: bullet.y,
+                bulletId: bullet.id
+            });
+        }
         return false; // 移除子弹
     }
-    
+
     // 检查玩家碰撞（分队模式下子弹穿过队友，不造成伤害）
     let bulletHitPlayer = false;
     const shooter = gameState.players.get(bullet.ownerId);
 
     gameState.players.forEach(player => {
+        if (bulletHitPlayer) return;
         if (player.id !== bullet.ownerId && player.isAlive && !isSameTeam(player, shooter)) {
             const dx = bullet.x - (player.x + GAME_CONFIG.PLAYER_SIZE / 2);
             const dy = bullet.y - (player.y + GAME_CONFIG.PLAYER_SIZE / 2);
             const distance = Math.sqrt(dx * dx + dy * dy);
-            
+
             if (distance < (GAME_CONFIG.PLAYER_SIZE / 2 + GAME_CONFIG.BULLET_SIZE / 2)) {
+                bulletHitPlayer = true;
+                if (isRocket) {
+                    // 火箭弹直击：转为爆炸结算（命中者位于爆心，吃满伤害）
+                    explodeBullet(bullet);
+                    return;
+                }
                 let damage = bullet.damage || 25;
-                
                 if (shooter && shooter.powerups.damageBoost && shooter.powerups.damageBoost.active) {
                     damage = Math.floor(damage * 1.5);
                 }
-                
-                const wasAlive = player.isAlive;
-                player.takeDamage(damage);
-                
-                if (shooter) {
-                    if (wasAlive && !player.isAlive) {
-                        shooter.score = Math.min(65535, (shooter.score || 0) + 100);
-                        const killInfo = {
-                            killer: shooter.nickname,
-                            victim: player.nickname,
-                            weapon: (WEAPONS[shooter.weapon] || WEAPONS.rifle).name,
-                            timestamp: Date.now()
-                        };
-                        gameState.killFeed.push(killInfo);
-                        
-                        broadcast({
-                            type: 'killFeed',
-                            killInfo: killInfo
-                        });
-                    } else {
-                        shooter.score = Math.min(65535, (shooter.score || 0) + 10);
-                    }
-                }
-                
-                broadcast({
-                    type: 'playerHit',
-                    targetId: player.id,
-                    shooterId: bullet.ownerId,
-                    damage: damage,
-                    isKill: wasAlive && !player.isAlive
-                });
-                
-                bulletHitPlayer = true;
+                applyDamageTo(player, damage, bullet.ownerId, (WEAPONS[shooter && shooter.weapon] || WEAPONS.rifle).name);
             }
         }
     });
-    
+
     return !bulletHitPlayer; // 击中玩家则移除子弹
 }
 
@@ -3176,9 +3332,11 @@ function updateGameLogic() {
     gameState.bullets = gameState.bullets.filter(bullet => {
         bullet.update(playerDeltaTime);
         if (bullet.life <= 0) {
+            // 火箭弹/手雷寿命到期（引信）时起爆
+            if (bullet.kind === 1 || bullet.kind === 2) explodeBullet(bullet);
             return false;
         }
-        
+
         // 子弹物理更新（碰撞检测等）
         return processBulletCollisions(bullet);
     });
