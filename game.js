@@ -2073,13 +2073,15 @@ class GameClient {
         if (!nameEl || !magEl || !resEl || !this.playerId) return;
         const me = this.players.get(this.playerId);
         if (!me) return;
-        // 感染者：显示利爪，无弹药概念
+        // 感染者：显示利爪，无弹药/手雷概念
         if (this.gameConfig && this.gameConfig.GAME_MODE === 'infect' && me.team === 1) {
             nameEl.textContent = '感染者';
             magEl.textContent = '利爪';
             resEl.textContent = '';
             const tk = document.getElementById('reloadTrack');
             if (tk) tk.classList.add('hidden');
+            const gz = document.getElementById('grenadeCount');
+            if (gz) gz.textContent = '—';
             return;
         }
 
@@ -3135,6 +3137,8 @@ class GameClient {
     sendGrenade() {
         const me = this.players.get(this.playerId);
         if (!me || !me.isAlive || !this.ws) return;
+        // 感染者没有手雷
+        if (this.gameConfig && this.gameConfig.GAME_MODE === 'infect' && me.team === 1) return;
         const now = Date.now();
         if (now - (this.lastGrenadeSent || 0) < 1000) return;
         if ((me.grenades | 0) <= 0) {

@@ -1066,6 +1066,7 @@ class Player {
     // 投掷手雷：朝目标点飞行，到落点（或撞墙停驻）后由引信起爆
     throwGrenade(targetX, targetY) {
         const now = Date.now();
+        if (matchConfig.infectMode && this.team === 1) return null; // 感染者没有手雷
         if (!this.isAlive || this.grenades <= 0) return null;
         if (now - (this.lastGrenade || 0) < GRENADE.cooldownMs) return null;
         this.lastGrenade = now;
@@ -1490,49 +1491,142 @@ function hasLineOfSight(x1, y1, x2, y2) {
 }
 
 // 决策：选敌人、定路点（低频调用）
+// 机器人策略大脑：按模式与处境决策（逃跑/搜刮/交战/抱团/巡逻）
+function clampWaypoint(bot) {
+    const m = 60;
+    bot.waypointX = Math.max(m, Math.min(GAME_CONFIG.CANVAS_WIDTH - m, bot.waypointX));
+    bot.waypointY = Math.max(m, Math.min(GAME_CONFIG.CANVAS_HEIGHT - m, bot.waypointY));
+}
+
+function botNearestCrate(cx, cy, range) {
+    let t = null, td = Infinity;
+    gameState.powerups.forEach(p => {
+        const d = Math.hypot(p.x - cx, p.y - cy);
+        if (d < range && d < td && hasLineOfSight(cx, cy, p.x, p.y)) { t = p; td = d; }
+    });
+    return t;
+}
+
 function botThink(me, bot) {
     const size = GAME_CONFIG.PLAYER_SIZE;
     const cx = me.x + size / 2, cy = me.y + size / 2;
+    const isInfectedBot = matchConfig.infectMode && me.team === 1;
+    const isSurvivorBot = matchConfig.infectMode && me.team === 2;
 
-    // 选最近的可见敌人（真人和其他机器人都打，分队模式下不打队友）
-    let best = null, bestDist = Infinity;
+    // ---- 感知：可见敌人集合 ----
+    const enemies = [];
     gameState.players.forEach(p => {
         if (p.id === me.id || !p.isAlive || isSameTeam(p, me)) return;
         const px = p.x + size / 2, py = p.y + size / 2;
         const d = Math.hypot(px - cx, py - cy);
-        if (d < bestDist && d < 520 && hasLineOfSight(cx, cy, px, py)) {
-            best = p;
-            bestDist = d;
-        }
+        if (d < 560 && hasLineOfSight(cx, cy, px, py)) enemies.push({ p, px, py, d });
     });
-    bot.enemyId = best ? best.id : null;
+    const nearest = enemies.length ? enemies.reduce((a, b) => (a.d < b.d ? a : b)) : null;
 
-    if (best) {
-        // 交战走位：保持中距离并横向游走
-        const px = best.x + size / 2, py = best.y + size / 2;
-        const ang = Math.atan2(py - cy, px - cx);
-        const strafe = (Math.random() < 0.5 ? 1 : -1) * (Math.PI / 2);
-        let ax = Math.cos(ang + strafe), ay = Math.sin(ang + strafe);
-        if (bestDist > 280) { ax += Math.cos(ang); ay += Math.sin(ang); }
-        else if (bestDist < 150) { ax -= Math.cos(ang); ay -= Math.sin(ang); }
+    // ---- 目标选择（分模式）----
+    let target = null;
+    if (enemies.length) {
+        if (isInfectedBot) {
+            target = nearest; // 感染者：锁定最近的猎物
+        } else {
+            // 优先补刀 420px 内的残血敌人，否则打最近的
+            const wounded = enemies.filter(e => e.d < 420 && e.p.health <= 50);
+            target = wounded.length
+                ? wounded.reduce((a, b) => (a.p.health < b.p.health ? a : b))
+                : nearest;
+        }
+    }
+    bot.enemyId = target ? target.p.id : null;
+
+    // ---- 状态 1：幸存者被感染者逼近 → 边打边撤 ----
+    if (isSurvivorBot && nearest && nearest.d < 260) {
+        const ang = Math.atan2(nearest.py - cy, nearest.px - cx);
+        const jitter = (Math.random() - 0.5) * 0.9;
+        bot.waypointX = cx - Math.cos(ang + jitter) * 190;
+        bot.waypointY = cy - Math.sin(ang + jitter) * 190;
+        clampWaypoint(bot);
+        return;
+    }
+
+    // ---- 状态 2：残血遇敌 → 撤退，顺路吃箱子回状态 ----
+    if (!isInfectedBot && me.health <= 35 && nearest && nearest.d < 380) {
+        const ang = Math.atan2(nearest.py - cy, nearest.px - cx);
+        let fx = cx - Math.cos(ang) * 200;
+        let fy = cy - Math.sin(ang) * 200;
+        const crate = botNearestCrate(cx, cy, 300);
+        if (crate) {
+            const ca = Math.atan2(crate.y - cy, crate.x - cx);
+            if (Math.cos(ca - (ang + Math.PI)) > 0.3) { fx = crate.x; fy = crate.y; } // 箱子在逃跑方向才绕
+        }
+        bot.waypointX = fx;
+        bot.waypointY = fy;
+        clampWaypoint(bot);
+        return;
+    }
+
+    // ---- 状态 3：交战 ----
+    if (target) {
+        if (isInfectedBot) {
+            bot.waypointX = target.px;
+            bot.waypointY = target.py;
+            return;
+        }
+        // 按武器保持理想射程 + 横向游走（每次思考有概率换向）
+        const pref = ({ rifle: 240, smg: 160, shotgun: 95, sniper: 340, rpg: 260 })[me.weapon] || 220;
+        const ang = Math.atan2(target.py - cy, target.px - cx);
+        if (!bot.strafeDir || Math.random() < 0.3) bot.strafeDir = Math.random() < 0.5 ? 1 : -1;
+        let ax = Math.cos(ang + bot.strafeDir * Math.PI / 2);
+        let ay = Math.sin(ang + bot.strafeDir * Math.PI / 2);
+        if (target.d > pref + 60) { ax += Math.cos(ang) * 1.4; ay += Math.sin(ang) * 1.4; }
+        else if (target.d < pref - 50) { ax -= Math.cos(ang) * 1.4; ay -= Math.sin(ang) * 1.4; }
         const alen = Math.hypot(ax, ay) || 1;
         bot.waypointX = cx + (ax / alen) * 140;
         bot.waypointY = cy + (ay / alen) * 140;
-    } else {
-        // 巡逻：优先去附近道具，否则随机换目标点
-        let target = null, td = Infinity;
-        gameState.powerups.forEach(p => {
-            const d = Math.hypot(p.x - cx, p.y - cy);
-            if (d < 420 && d < td && hasLineOfSight(cx, cy, p.x, p.y)) { target = p; td = d; }
-        });
-        if (target) {
-            bot.waypointX = target.x;
-            bot.waypointY = target.y;
-        } else if (Math.hypot(bot.waypointX - cx, bot.waypointY - cy) < 40 || Math.random() < 0.25) {
-            const m = 80;
-            bot.waypointX = m + Math.random() * (GAME_CONFIG.CANVAS_WIDTH - m * 2);
-            bot.waypointY = m + Math.random() * (GAME_CONFIG.CANVAS_HEIGHT - m * 2);
+        clampWaypoint(bot);
+
+        // 中距离概率投雷（带移动预判）
+        if (me.grenades > 0 && target.d > 130 && target.d < 300 && Math.random() < 0.2) {
+            const lead = 25;
+            const g = me.throwGrenade(
+                target.px + (target.p.vx || 0) * lead,
+                target.py + (target.p.vy || 0) * lead
+            );
+            if (g) gameState.bullets.push(g);
         }
+        return;
+    }
+
+    // ---- 无敌人：安全时补满弹夹 ----
+    if (!isInfectedBot && !me.reloading && me.reserve !== 0) {
+        const w = WEAPONS[me.weapon];
+        if (me.mag < w.magSize * 0.5) me.startReload();
+    }
+
+    // ---- 状态 4：分队/感染者阵营 → 与队友抱团行动 ----
+    if ((matchConfig.teamMode || isInfectedBot) && Math.random() < 0.5) {
+        let mate = null, md = Infinity;
+        gameState.players.forEach(p => {
+            if (p.id === me.id || !p.isAlive || !isSameTeam(p, me)) return;
+            const d = Math.hypot(p.x - me.x, p.y - me.y);
+            if (d < md) { mate = p; md = d; }
+        });
+        if (mate && md > 220) {
+            bot.waypointX = mate.x + (Math.random() - 0.5) * 80;
+            bot.waypointY = mate.y + (Math.random() - 0.5) * 80;
+            clampWaypoint(bot);
+            return;
+        }
+    }
+
+    // ---- 状态 5：巡逻搜刮：优先去箱子，否则随机换点 ----
+    const crate = botNearestCrate(cx, cy, 460);
+    if (crate) {
+        bot.waypointX = crate.x;
+        bot.waypointY = crate.y;
+    } else if (Math.hypot(bot.waypointX - cx, bot.waypointY - cy) < 40 || Math.random() < 0.25) {
+        const m = 80;
+        bot.waypointX = m + Math.random() * (GAME_CONFIG.CANVAS_WIDTH - m * 2);
+        bot.waypointY = m + Math.random() * (GAME_CONFIG.CANVAS_HEIGHT - m * 2);
     }
 }
 
