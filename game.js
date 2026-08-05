@@ -942,6 +942,29 @@ class GameClient {
         }
     }
 
+    // 触屏设备：进入沉浸模式（浏览器全屏 + 尝试锁定横屏）
+    // 需要用户手势上下文；iPhone Safari 不支持全屏 API，静默跳过
+    requestImmersive() {
+        if (!this.isTouch) return;
+        try {
+            const el = document.documentElement;
+            const lockLandscape = () => {
+                if (screen.orientation && screen.orientation.lock) {
+                    screen.orientation.lock('landscape').catch(() => {});
+                }
+            };
+            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                const req = el.requestFullscreen || el.webkitRequestFullscreen;
+                if (req) {
+                    const p = req.call(el);
+                    if (p && p.then) p.then(lockLandscape).catch(() => {});
+                }
+            } else {
+                lockLandscape();
+            }
+        } catch (e) {}
+    }
+
     // 触屏方案：左 45% 屏落指出浮动摇杆控制移动；右侧落指按住即朝该方向自动开火，
     // 拖动改变瞄准方向；死亡时点右侧复活；右下三颗按钮：近战/手雷/换弹
     setupTouchControls() {
@@ -968,6 +991,10 @@ class GameClient {
 
         container.addEventListener('touchstart', (e) => {
             if (!this.playerId) return; // 未进入游戏不拦截（大厅正常滚动/点击）
+            // 游戏中触摸即尝试进入全屏沉浸（未全屏时）
+            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                this.requestImmersive();
+            }
             let handled = false;
             for (const t of e.changedTouches) {
                 if (t.target.closest && t.target.closest('.touch-btn, #hudRight, #invitePanel, #inviteToggle')) continue;
@@ -1059,6 +1086,7 @@ class GameClient {
             if (this.isTouch) {
                 const tc = document.getElementById('touchControls');
                 if (tc) tc.classList.remove('hidden');
+                this.requestImmersive(); // 进入游戏即尝试全屏（按钮点击的手势上下文）
             }
             if (window.gameMusic) window.gameMusic.play('battle');
         };
