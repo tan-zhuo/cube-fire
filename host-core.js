@@ -1706,6 +1706,10 @@ function updateBots(now) {
                 } else {
                     delay = w.fireRate + 150 + Math.random() * 300;
                 }
+                // 急速射击增益：节奏全面提速一倍
+                if (me.powerups.rapidFire && me.powerups.rapidFire.active) {
+                    delay = Math.max(45, delay * 0.5);
+                }
                 bot.nextShot = now + delay;
             }
         } else if (wd > 8) {
