@@ -134,13 +134,16 @@ class SoundFX {
         this.tone('triangle', 160, 90, 0.1, 0.2 * vol);
     }
 
-    streak(level = 2) { // 连杀号角：级别越高音阶越长越亮
+    streak(level = 2) { // 连杀号角：底鼓起势 + 级别越高音阶越长越亮
+        this.tone('sine', 150, 45, 0.14, 0.5);
+        this.noise(0.06, 2500, 600, 0.3);
         const base = [392, 494, 587, 740, 880, 1109]; // G4 B4 D5 F#5 A5 C#6
         const n = Math.min(base.length, 1 + level);
         for (let i = 0; i < n; i++) {
-            this.tone('triangle', base[i], base[i], 0.13, 0.30, i * 0.07);
+            this.tone('triangle', base[i], base[i], 0.15, 0.45, 0.06 + i * 0.08);
+            this.tone('square', base[i] * 2, base[i] * 2, 0.1, 0.1, 0.06 + i * 0.08); // 高八度增亮
         }
-        if (level >= 5) this.noise(0.3, 5000, 1200, 0.15, n * 0.07, 'highpass');
+        if (level >= 5) this.noise(0.4, 6000, 1200, 0.22, 0.06 + n * 0.08, 'highpass');
     }
 
     streakEnd() { // 连杀被终结：下行短叹
@@ -169,10 +172,11 @@ class SoundFX {
         this.tone('sine', 180, 70, 0.16, 0.4);
     }
 
-    kill() { // 击杀奖励音
-        this.tone('triangle', 520, 780, 0.09, 0.4);
-        this.tone('triangle', 780, 1180, 0.12, 0.36, 0.08);
-        this.noise(0.16, 4000, 900, 0.14, 0.05, 'highpass');
+    kill() { // 击杀确认：响亮双音上行 + 亮镲收尾
+        this.tone('triangle', 520, 780, 0.1, 0.55);
+        this.tone('triangle', 780, 1180, 0.14, 0.5, 0.08);
+        this.tone('square', 1560, 1560, 0.08, 0.2, 0.17);
+        this.noise(0.2, 6500, 2200, 0.24, 0.05, 'highpass');
     }
 
     death() { // 自己阵亡

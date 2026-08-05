@@ -1937,6 +1937,7 @@ class GameClient {
                         this.damageNumbers.push(new DamageNumber(
                             pickedUpPlayer.x + 10, pickedUpPlayer.y - 8, '+HP', '#5dde9a'
                         ));
+                        pickedUpPlayer.healFxUntil = Date.now() + 1400; // 治疗涌动特效
                     }
                     // 开箱揭示：内容色爆裂 + 光环 + 内容名浮字
                     const revealColor = ({
@@ -3580,6 +3581,37 @@ class GameClient {
         this.backCtx.arc(-size * 0.22, -size * 0.22, size * 0.13, 0, Math.PI * 2);
         this.backCtx.fill();
 
+        // 护盾：贴身铠甲（肩甲两块 + 后背胸甲带 + 铆钉），钢蓝色金属质感
+        if (player.isAlive && player.powerups && player.powerups.shield && player.powerups.shield.active) {
+            const actx = this.backCtx;
+            actx.fillStyle = '#b9c8dd';
+            actx.strokeStyle = '#46536b';
+            actx.lineWidth = 1.5;
+            // 肩甲（旋转系上下两侧，即角色左右肩）
+            for (const sy of [-1, 1]) {
+                actx.beginPath();
+                actx.roundRect(-size * 0.48, sy === -1 ? -size * 0.6 : size * 0.36, size * 0.8, size * 0.24, 4);
+                actx.fill();
+                actx.stroke();
+            }
+            // 后背胸甲带（避开前脸的眼睛）
+            actx.beginPath();
+            actx.roundRect(-size * 0.55, -size * 0.16, size * 0.42, size * 0.32, 4);
+            actx.fill();
+            actx.stroke();
+            // 铆钉
+            actx.fillStyle = '#5d6b84';
+            for (const [rx, ry] of [
+                [-size * 0.32, -size * 0.48], [size * 0.12, -size * 0.48],
+                [-size * 0.32, size * 0.48], [size * 0.12, size * 0.48],
+                [-size * 0.42, 0]
+            ]) {
+                actx.beginPath();
+                actx.arc(rx, ry, 1.3, 0, Math.PI * 2);
+                actx.fill();
+            }
+        }
+
         // 受击白闪
         if (player.hitFlashUntil && player.hitFlashUntil > Date.now()) {
             this.backCtx.fillStyle = 'rgba(255, 255, 255, 0.75)';
@@ -3665,9 +3697,20 @@ class GameClient {
             }
         }
 
+        // 增益武器光效：伤害强化=赤红灼光 / 急速射击=炽热橙光
+        const dmgGlow = player.powerups && player.powerups.damageBoost && player.powerups.damageBoost.active;
+        const rapidGlow = player.powerups && player.powerups.rapidFire && player.powerups.rapidFire.active;
+        if (dmgGlow) {
+            this.backCtx.shadowColor = '#ff4d4d';
+            this.backCtx.shadowBlur = 10;
+        } else if (rapidGlow) {
+            this.backCtx.shadowColor = '#ffb347';
+            this.backCtx.shadowBlur = 10;
+        }
+
         // 枪械外观（随武器变化；感染者无枪）
         const wIdx = player.weapon || 0;
-        this.backCtx.fillStyle = '#e8edf5';
+        this.backCtx.fillStyle = dmgGlow ? '#ffd6cf' : rapidGlow ? '#ffe9c4' : '#e8edf5';
         if (isZombie) {
             // 已画爪，跳过枪械
         } else if (wIdx === 1) {
@@ -3737,8 +3780,6 @@ class GameClient {
         this.backCtx.textAlign = 'center';
         this.backCtx.fillText(player.nickname, player.x + size / 2, player.y - 20);
         
-        // 绘制buff标记（在角色下方）
-        this.drawPlayerBuffMarkers(player, size);
         
         // 绘制buff效果
         this.drawPlayerBuffs(player, size);
@@ -3888,79 +3929,104 @@ class GameClient {
         this.backCtx.restore();
     }
 
+    // 增益的角色环绕表现：护盾微光罩 / 急速能量弧 / 伤害强化尖刺气场 / 治疗涌动
     drawPlayerBuffs(player, size) {
         if (!player.powerups) return;
-        
+
+        const ctx = this.backCtx;
         const centerX = player.x + size / 2;
         const centerY = player.y + size / 2;
         const time = Date.now();
-        
-        // 护盾效果 - 紫色光环
+
+        // 护盾：淡蓝护罩微光（铠甲主体画在角色旋转坐标系里）
         if (player.powerups.shield && player.powerups.shield.active) {
-            this.backCtx.save();
-            this.backCtx.strokeStyle = '#9b59b6';
-            this.backCtx.lineWidth = 3;
-            this.backCtx.globalAlpha = 0.7 + 0.3 * Math.sin(time * 0.01);
-            this.backCtx.beginPath();
-            this.backCtx.arc(centerX, centerY, size / 2 + 5, 0, Math.PI * 2);
-            this.backCtx.stroke();
-            this.backCtx.restore();
+            ctx.save();
+            const pulse = 0.25 + 0.12 * Math.sin(time * 0.006);
+            const g = ctx.createRadialGradient(centerX, centerY, size * 0.4, centerX, centerY, size * 0.95);
+            g.addColorStop(0, 'rgba(140, 190, 255, 0)');
+            g.addColorStop(1, `rgba(140, 190, 255, ${pulse})`);
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, size * 0.95, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
         }
-        
-        // 快速射击效果 - 橙色闪电
+
+        // 急速射击：两段高速旋转的金色能量弧
         if (player.powerups.rapidFire && player.powerups.rapidFire.active) {
-            this.backCtx.save();
-            this.backCtx.strokeStyle = '#e67e22';
-            this.backCtx.lineWidth = 2;
-            this.backCtx.globalAlpha = 0.8 + 0.2 * Math.sin(time * 0.02);
-            
-            // 绘制闪电效果
-            for (let i = 0; i < 3; i++) {
-                const angle = (time * 0.01 + i * Math.PI * 2 / 3) % (Math.PI * 2);
-                const startX = centerX + Math.cos(angle) * (size / 2 + 8);
-                const startY = centerY + Math.sin(angle) * (size / 2 + 8);
-                const endX = centerX + Math.cos(angle) * (size / 2 + 15);
-                const endY = centerY + Math.sin(angle) * (size / 2 + 15);
-                
-                this.backCtx.beginPath();
-                this.backCtx.moveTo(startX, startY);
-                this.backCtx.lineTo(endX, endY);
-                this.backCtx.stroke();
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.lineCap = 'round';
+            const base = time * 0.012;
+            for (const phase of [0, Math.PI]) {
+                ctx.strokeStyle = 'rgba(255, 200, 80, 0.85)';
+                ctx.lineWidth = 2.5;
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, size * 0.85, base + phase, base + phase + 1.1);
+                ctx.stroke();
+                // 弧头亮点
+                const hx = centerX + Math.cos(base + phase + 1.1) * size * 0.85;
+                const hy = centerY + Math.sin(base + phase + 1.1) * size * 0.85;
+                ctx.fillStyle = '#fff2c8';
+                ctx.beginPath();
+                ctx.arc(hx, hy, 2.2, 0, Math.PI * 2);
+                ctx.fill();
             }
-            this.backCtx.restore();
+            ctx.restore();
         }
-        
-        // 伤害提升效果 - 红色火焰
+
+        // 伤害强化：缓慢旋转的红色尖刺气场（脉动）
         if (player.powerups.damageBoost && player.powerups.damageBoost.active) {
-            this.backCtx.save();
-            
-            // 多层火焰效果
-            for (let flame = 0; flame < 5; flame++) {
-                const flameAngle = (time * 0.003 + flame * Math.PI * 2 / 5) % (Math.PI * 2);
-                const flameRadius = size / 2 + 6 + Math.sin(time * 0.004 + flame) * 4;
-                const flameX = centerX + Math.cos(flameAngle) * flameRadius;
-                const flameY = centerY + Math.sin(flameAngle) * flameRadius;
-                
-                // 火焰渐变色彩
-                const gradient = this.backCtx.createRadialGradient(
-                    flameX, flameY, 0,
-                    flameX, flameY, 8
-                );
-                gradient.addColorStop(0, '#ff4444');
-                gradient.addColorStop(0.5, '#ff8800');
-                gradient.addColorStop(1, 'rgba(255, 255, 0, 0)');
-                
-                this.backCtx.fillStyle = gradient;
-                this.backCtx.globalAlpha = 0.7 + 0.3 * Math.sin(time * 0.006 + flame);
-                
-                this.backCtx.beginPath();
-                this.backCtx.arc(flameX, flameY, 6 + Math.sin(time * 0.008 + flame) * 2, 0, Math.PI * 2);
-                this.backCtx.fill();
+            ctx.save();
+            const rot = time * 0.0022;
+            const spikes = 8;
+            const rIn = size * 0.72 + Math.sin(time * 0.008) * 1.5;
+            const rOut = rIn + 7 + Math.sin(time * 0.008) * 2;
+            ctx.globalAlpha = 0.8;
+            const grad = ctx.createRadialGradient(centerX, centerY, rIn, centerX, centerY, rOut);
+            grad.addColorStop(0, 'rgba(255, 90, 60, 0.85)');
+            grad.addColorStop(1, 'rgba(255, 170, 60, 0.15)');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            for (let i = 0; i < spikes; i++) {
+                const a0 = rot + (i / spikes) * Math.PI * 2;
+                const a1 = a0 + Math.PI / spikes;
+                const a2 = a0 + (Math.PI * 2) / spikes;
+                ctx.moveTo(centerX + Math.cos(a0) * rIn, centerY + Math.sin(a0) * rIn);
+                ctx.lineTo(centerX + Math.cos(a1) * rOut, centerY + Math.sin(a1) * rOut);
+                ctx.lineTo(centerX + Math.cos(a2) * rIn, centerY + Math.sin(a2) * rIn);
             }
-            
-            this.backCtx.restore();
+            ctx.fill();
+            ctx.restore();
         }
-        
+
+        // 治疗涌动：拾取回血后 1.4s 内绿色十字上升 + 身体绿光
+        if (player.healFxUntil && player.healFxUntil > time) {
+            ctx.save();
+            const p = 1 - (player.healFxUntil - time) / 1400;
+            ctx.globalAlpha = Math.min(1, (1 - p) * 1.6);
+            // 身体绿光
+            const hg = ctx.createRadialGradient(centerX, centerY, size * 0.3, centerX, centerY, size * 0.9);
+            hg.addColorStop(0, 'rgba(80, 230, 140, 0.25)');
+            hg.addColorStop(1, 'rgba(80, 230, 140, 0)');
+            ctx.fillStyle = hg;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, size * 0.9, 0, Math.PI * 2);
+            ctx.fill();
+            // 三枚上升绿十字（不同相位）
+            ctx.fillStyle = '#5dde9a';
+            for (let i = 0; i < 3; i++) {
+                const ph = (p + i * 0.33) % 1;
+                const cxx = centerX + (i - 1) * size * 0.42;
+                const cyy = centerY + size * 0.4 - ph * size * 1.5;
+                const s = 2.4;
+                ctx.globalAlpha = Math.min(1, (1 - ph) * 1.4) * Math.min(1, (1 - p) * 1.6);
+                ctx.fillRect(cxx - s / 2, cyy - s * 1.5, s, s * 3);
+                ctx.fillRect(cxx - s * 1.5, cyy - s / 2, s * 3, s);
+            }
+            ctx.restore();
+        }
+
         // buff持续时间显示
         this.drawBuffTimers(player, centerX, centerY - size / 2 - 20, time);
     }
