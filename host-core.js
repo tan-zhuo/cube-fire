@@ -80,7 +80,7 @@ const WEAPONS = {
     rifle:   { name: '步枪',   damage: 25, fireRate: 200,  magSize: 30, reloadMs: 1500, pellets: 1, spread: 0,    speed: 10, reserve: -1,  lifeMs: 2000 },
     smg:     { name: '冲锋枪', damage: 12, fireRate: 90,   magSize: 40, reloadMs: 1600, pellets: 1, spread: 0.09, speed: 11, reserve: 80,  lifeMs: 2000 },
     shotgun: { name: '霰弹枪', damage: 11, fireRate: 750,  magSize: 6,  reloadMs: 2200, pellets: 6, spread: 0.34, speed: 9,  reserve: 24,  lifeMs: 450 },
-    sniper:  { name: '狙击枪', damage: 80, fireRate: 1100, magSize: 5,  reloadMs: 2400, pellets: 1, spread: 0,    speed: 12, reserve: 10,  lifeMs: 2000 },
+    sniper:  { name: '狙击枪', damage: 100, fireRate: 1100, magSize: 5,  reloadMs: 2400, pellets: 1, spread: 0,    speed: 12, reserve: 10,  lifeMs: 2000 }, // 无护盾满血一枪带走
     rpg:     { name: '火箭筒', damage: 85, fireRate: 1500, magSize: 1,  reloadMs: 2500, pellets: 1, spread: 0,    speed: 7,  reserve: 4,   lifeMs: 2200, kind: 1, blastRadius: 90 }
 };
 const WEAPON_IDS = ['rifle', 'smg', 'shotgun', 'sniper', 'rpg']; // uint8 索引编码
@@ -1687,14 +1687,26 @@ function updateBots(now) {
             if (d <= GAME_CONFIG.MELEE_RANGE * 0.9 && me.canMelee()) {
                 me.meleeAttack(ex, ey);
             } else if (now >= bot.nextShot && me.canShoot() && hasLineOfSight(cx, cy, ex, ey)) {
-                // 简单移动预判 + 按距离放大的散布，保证打得中但不变态
+                // 移动预判 + 按武器差异化的精度（狙击最稳、冲锋枪泼洒）
+                const acc = ({ sniper: 0.08, rifle: 0.18, smg: 0.26, shotgun: 0.3, rpg: 0.15 })[me.weapon] || 0.22;
                 const lead = Math.min(30, d * 0.12);
-                const tx = ex + (enemy.vx || 0) * lead + (Math.random() - 0.5) * d * 0.22 * bot.aimErr;
-                const ty = ey + (enemy.vy || 0) * lead + (Math.random() - 0.5) * d * 0.22 * bot.aimErr;
+                const tx = ex + (enemy.vx || 0) * lead + (Math.random() - 0.5) * d * acc * bot.aimErr;
+                const ty = ey + (enemy.vy || 0) * lead + (Math.random() - 0.5) * d * acc * bot.aimErr;
                 const botBullets = me.shoot(tx, ty);
                 if (botBullets) botBullets.forEach(b => gameState.bullets.push(b));
-                const botRate = Math.max(WEAPONS[me.weapon].fireRate, 220);
-                bot.nextShot = now + botRate + Math.random() * 340;
+                // 按武器差异化射击节奏：冲锋枪成串连喷，步枪贴近真实射速，重武器留手
+                const w = WEAPONS[me.weapon];
+                let delay;
+                if (me.weapon === 'smg') {
+                    if (!bot.burstLeft || bot.burstLeft <= 0) bot.burstLeft = 5 + ((Math.random() * 6) | 0);
+                    bot.burstLeft--;
+                    delay = bot.burstLeft > 0 ? w.fireRate + Math.random() * 40 : 420 + Math.random() * 380;
+                } else if (me.weapon === 'rifle') {
+                    delay = w.fireRate + Math.random() * 160;
+                } else {
+                    delay = w.fireRate + 150 + Math.random() * 300;
+                }
+                bot.nextShot = now + delay;
             }
         } else if (wd > 8) {
             // 无敌人时面朝移动方向
