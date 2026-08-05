@@ -866,6 +866,10 @@
             left: 16px;
             bottom: 16px;
             z-index: 100;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 8px;
         }
 
         .ui-panel {
@@ -963,6 +967,34 @@
         .score-container {
             display: flex;
             align-items: center;
+        }
+
+        .ammo-panel {
+            padding: 7px 16px;
+            gap: 12px;
+        }
+
+        .ammo-icon {
+            min-width: 44px;
+            text-align: center;
+            padding: 3px 8px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            border-radius: 6px;
+            color: var(--accent);
+            background: rgba(56, 189, 248, 0.12);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            white-space: nowrap;
+        }
+
+        .ammo-value {
+            font-size: 17px;
+            font-weight: 800;
+            font-family: var(--mono);
+            color: var(--text-hi);
+            white-space: nowrap;
+            min-width: 64px;
         }
 
         .score-icon {
@@ -1305,6 +1337,9 @@
         @media (max-width: 1500px) {
             :root { --sidebar-w: 280px; }
             #hudRight { width: 248px; }
+            /* 窄屏下压缩血条并右移提示条，避免与左下面板重叠 */
+            .health-bar-container { width: 150px; }
+            #instructions { left: calc((100vw - var(--sidebar-w)) / 2 + 70px); }
         }
 
         @media (max-width: 900px) {
@@ -1724,8 +1759,12 @@
             </div>
         </aside>
 
-        <!-- 左下：生命值 / 分数 -->
+        <!-- 左下：弹药 / 生命值 / 分数 -->
         <div id="ui" class="hidden">
+            <div class="ui-panel ammo-panel">
+                <div class="ammo-icon" id="weaponName">步枪</div>
+                <div class="ammo-value" id="ammoText">30 / ∞</div>
+            </div>
             <div class="ui-panel">
                 <div class="health-bar-container">
                     <div class="health-icon">HP</div>
@@ -1744,7 +1783,7 @@
 
         <!-- 底部中央：操作提示 -->
         <div id="instructions" class="hidden">
-            <div><span class="keycap">WASD</span> 移动&nbsp;&nbsp;<span class="keycap">鼠标</span> 瞄准&nbsp;&nbsp;<span class="keycap">左键</span> 射击&nbsp;&nbsp;<span class="keycap">右键</span> 近战&nbsp;&nbsp;<span class="keycap">空格</span> 复活&nbsp;&nbsp;<span class="keycap">M</span> 静音</div>
+            <div><span class="keycap">WASD</span> 移动&nbsp;&nbsp;<span class="keycap">左键</span> 射击&nbsp;&nbsp;<span class="keycap">右键</span> 近战&nbsp;&nbsp;<span class="keycap">R</span> 换弹&nbsp;&nbsp;<span class="keycap">空格</span> 复活&nbsp;&nbsp;<span class="keycap">M</span> 静音</div>
         </div>
 
         <!-- 游戏结束公告 -->
@@ -1880,6 +1919,7 @@
                     <span class="control-item"><span class="keycap">鼠标</span> 瞄准</span>
                     <span class="control-item"><span class="keycap">左键</span> 射击</span>
                     <span class="control-item"><span class="keycap">右键</span> 近战</span>
+                    <span class="control-item"><span class="keycap">R</span> 换弹</span>
                     <span class="control-item"><span class="keycap">空格</span> 复活</span>
                     <span class="control-item"><span class="keycap">M</span> 静音</span>
                 </div>

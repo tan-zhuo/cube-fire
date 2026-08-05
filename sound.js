@@ -90,9 +90,37 @@ class SoundFX {
     }
 
     // ---------- 游戏音效 ----------
-    shoot(vol = 1) {
-        this.noise(0.09, 3200, 400, 0.42 * vol);
-        this.tone('square', 620, 160, 0.08, 0.16 * vol);
+    shoot(vol = 1, weapon = 'rifle') {
+        switch (weapon) {
+            case 'smg': // 轻快短促
+                this.noise(0.06, 2800, 500, 0.30 * vol);
+                this.tone('square', 700, 220, 0.05, 0.12 * vol);
+                break;
+            case 'shotgun': // 低沉轰响
+                this.noise(0.22, 1400, 90, 0.55 * vol);
+                this.tone('sawtooth', 200, 55, 0.18, 0.30 * vol);
+                break;
+            case 'sniper': // 尖锐炸裂 + 长尾
+                this.noise(0.05, 6000, 2000, 0.5 * vol, 0, 'highpass');
+                this.noise(0.35, 2200, 150, 0.4 * vol);
+                this.tone('sawtooth', 900, 90, 0.22, 0.22 * vol);
+                break;
+            default: // 步枪
+                this.noise(0.09, 3200, 400, 0.42 * vol);
+                this.tone('square', 620, 160, 0.08, 0.16 * vol);
+        }
+    }
+
+    reload() { // 换弹：退匣-上匣两段咔嗒
+        this.tone('square', 240, 180, 0.04, 0.20);
+        this.noise(0.03, 3000, 1500, 0.12, 0.02, 'highpass');
+        this.tone('square', 300, 420, 0.05, 0.22, 0.16);
+        this.noise(0.04, 3500, 1800, 0.15, 0.17, 'highpass');
+    }
+
+    emptyClick() { // 空仓击锤
+        this.tone('square', 520, 380, 0.03, 0.16);
+        this.noise(0.02, 4000, 2500, 0.08, 0, 'highpass');
     }
 
     hitConfirm() { // 命中反馈（打中别人）

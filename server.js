@@ -96,13 +96,35 @@ const GAME_CONFIG = {
     MAX_HEALTH: 100,
     RESPAWN_TIME: 3000, // 3秒复活时间
     POWERUP_SIZE: 15,
-    POWERUP_SPAWN_INTERVAL: 20000, // 20秒生成一个道具
+    POWERUP_SPAWN_INTERVAL: 12000, // 12秒生成一个道具箱
     POWERUP_DURATION: 15000, // 道具持续时间15秒
     TERRAIN_SIZE: 40, // 地形块大小
     MELEE_RANGE: 50, // 近战攻击范围
     MELEE_DAMAGE: 100, // 近战攻击伤害（一刀秒杀）
     MELEE_COOLDOWN: 1000 // 近战攻击冷却时间1秒
 };
+
+// ===================== 武器表 =====================
+// 与 host-core.js / game.js（经 JOINED 配置下发）保持一致。
+// reserve 为拾取时的备弹（不含首个弹夹）；步枪为默认武器、备弹无限（-1）。
+const WEAPONS = {
+    rifle:   { name: '步枪',   damage: 25, fireRate: 200,  magSize: 30, reloadMs: 1500, pellets: 1, spread: 0,    speed: 10, reserve: -1,  lifeMs: 2000 },
+    smg:     { name: '冲锋枪', damage: 12, fireRate: 90,   magSize: 40, reloadMs: 1600, pellets: 1, spread: 0.09, speed: 11, reserve: 80,  lifeMs: 2000 },
+    shotgun: { name: '霰弹枪', damage: 11, fireRate: 750,  magSize: 6,  reloadMs: 2200, pellets: 6, spread: 0.34, speed: 9,  reserve: 24,  lifeMs: 450 },
+    sniper:  { name: '狙击枪', damage: 80, fireRate: 1100, magSize: 5,  reloadMs: 2400, pellets: 1, spread: 0,    speed: 12, reserve: 10,  lifeMs: 2000 }
+};
+const WEAPON_IDS = ['rifle', 'smg', 'shotgun', 'sniper']; // uint8 索引编码
+
+// 玩家武器状态的网络快照（w=武器索引 mag=弹夹 res=备弹(255=无限) rel=换弹剩余ms）
+function weaponNetState(p) {
+    const rel = p.reloading ? Math.max(0, p.reloadEnd - Date.now()) : 0;
+    return {
+        w: Math.max(0, WEAPON_IDS.indexOf(p.weapon)),
+        mag: Math.max(0, Math.min(255, p.mag | 0)),
+        res: p.reserve < 0 ? 255 : Math.max(0, Math.min(254, p.reserve | 0)),
+        rel: Math.min(65535, rel | 0)
+    };
+}
 
 // ===================== 地图注册表 =====================
 // 所有地图均为 1200x800（30x20 格，格宽 TERRAIN_SIZE=40）。
@@ -161,6 +183,7 @@ const MESSAGE_TYPES = {
     JOIN: 1,
     MOVE: 2,
     SHOOT: 3,
+    RELOAD: 8,
     MELEE: 4,
     RESPAWN: 5,
     CHAT: 6,
@@ -261,7 +284,9 @@ function encodeJoined(playerId) {
         ...GAME_CONFIG,
         MAP_ID: matchConfig.mapId,
         MAP_NAME: map.name,
-        TEAM_MODE: matchConfig.teamMode
+        TEAM_MODE: matchConfig.teamMode,
+        WEAPONS: WEAPONS,
+        WEAPON_IDS: WEAPON_IDS
     }));
     return encoder.getBuffer();
 }
@@ -298,6 +323,11 @@ function encodeIncrementalUpdate(update) {
             enc.writeUint8(p.isAlive ? 1 : 0);
             enc.writeString(p.color || '#3498db');
             enc.writeUint8(p.team || 0);
+            // 武器状态
+            enc.writeUint8(p.weapon | 0);
+            enc.writeUint8(p.mag | 0);
+            enc.writeUint8(p.reserve === undefined ? 255 : p.reserve);
+            enc.writeUint16(p.reloadRem | 0);
         });
     }
 
@@ -314,7 +344,8 @@ function encodeIncrementalUpdate(update) {
             if (c.health !== undefined) mask |= 0x08;
             if (c.score !== undefined) mask |= 0x10;
             if (c.isAlive !== undefined) mask |= 0x20;
-            if (c.powerups !== undefined) mask |= 0x40; // 新增：道具状态变化
+            if (c.powerups !== undefined) mask |= 0x40; // 道具状态变化
+            if (c.weaponState !== undefined) mask |= 0x80; // 武器/弹药变化
             enc.writeUint8(mask);
             if (mask & 0x01) enc.writeUint16(Math.max(0, Math.min(65535, Math.round(c.x))));
             if (mask & 0x02) enc.writeUint16(Math.max(0, Math.min(65535, Math.round(c.y))));
@@ -335,6 +366,14 @@ function encodeIncrementalUpdate(update) {
                 writeBuff(c.powerups && c.powerups.shield);
                 writeBuff(c.powerups && (c.powerups.rapidFire || c.powerups.rapid_fire));
                 writeBuff(c.powerups && (c.powerups.damageBoost || c.powerups.damage_boost));
+            }
+
+            // 写入武器状态：武器索引(uint8) + 弹夹(uint8) + 备弹(uint8,255=无限) + 换弹剩余ms(uint16)
+            if (mask & 0x80) {
+                enc.writeUint8(c.weaponState.w | 0);
+                enc.writeUint8(c.weaponState.mag | 0);
+                enc.writeUint8(c.weaponState.res | 0);
+                enc.writeUint16(c.weaponState.rel | 0);
             }
         });
     }
@@ -431,6 +470,11 @@ function encodePlayerJoined(player) {
     enc.writeUint8(player.isAlive ? 1 : 0);
     enc.writeString(player.color || '#3498db');
     enc.writeUint8(player.team || 0);
+    // 武器状态（player 为 playerJoined 消息里的普通对象，字段已是编码值）
+    enc.writeUint8(player.weapon | 0);
+    enc.writeUint8(player.mag | 0);
+    enc.writeUint8(player.reserve === undefined ? 255 : player.reserve);
+    enc.writeUint16(player.reloadRem | 0);
     return enc.getBuffer();
 }
 
@@ -591,6 +635,13 @@ function encodeGameStateUpdate(gameState) {
         encoder.writeUint8(player.powerups && player.powerups.shield && player.powerups.shield.active ? 1 : 0);
         encoder.writeUint8(player.powerups && player.powerups.rapidFire && player.powerups.rapidFire.active ? 1 : 0);
         encoder.writeUint8(player.powerups && player.powerups.damageBoost && player.powerups.damageBoost.active ? 1 : 0);
+
+        // 武器状态
+        const ws = weaponNetState(player);
+        encoder.writeUint8(ws.w);
+        encoder.writeUint8(ws.mag);
+        encoder.writeUint8(ws.res);
+        encoder.writeUint16(ws.rel);
     });
     
     // 写入子弹数量和数据
@@ -656,6 +707,13 @@ function encodeInitialGameState(state) {
         encoder.writeUint8(player.powerups.shield.active ? 1 : 0);
         encoder.writeUint8(player.powerups.rapidFire.active ? 1 : 0);
         encoder.writeUint8(player.powerups.damageBoost.active ? 1 : 0);
+
+        // 武器状态
+        const ws = weaponNetState(player);
+        encoder.writeUint8(ws.w);
+        encoder.writeUint8(ws.mag);
+        encoder.writeUint8(ws.res);
+        encoder.writeUint16(ws.rel);
     });
 
     // 子弹
@@ -723,6 +781,9 @@ function decodeMessage(buffer) {
                     targetX: decoder.readFloat32(),
                     targetY: decoder.readFloat32()
                 };
+
+            case MESSAGE_TYPES.RELOAD:
+                return { type: 'reload' };
                 
             case MESSAGE_TYPES.MELEE:
                 return {
@@ -761,8 +822,21 @@ const POWERUP_TYPES = {
     SHIELD: 'shield',
     RAPID_FIRE: 'rapid_fire',
     DAMAGE_BOOST: 'damage_boost',
-    HEAL: 'heal'
+    HEAL: 'heal',
+    WEAPON_SMG: 'weapon_smg',
+    WEAPON_SHOTGUN: 'weapon_shotgun',
+    WEAPON_SNIPER: 'weapon_sniper'
 };
+
+// 道具箱类型 → 武器 id（非武器箱返回 null）
+function powerupWeapon(type) {
+    switch (type) {
+        case POWERUP_TYPES.WEAPON_SMG: return 'smg';
+        case POWERUP_TYPES.WEAPON_SHOTGUN: return 'shotgun';
+        case POWERUP_TYPES.WEAPON_SNIPER: return 'sniper';
+        default: return null;
+    }
+}
 
 // 玩家颜色配置
 const PLAYER_COLORS = [
@@ -845,8 +919,13 @@ class Player {
         this.isAlive = true;
         this.respawnTime = 0;
         this.lastShot = 0;
-        this.shotCooldown = 200; // 射击冷却时间(毫秒)
         this.lastMelee = 0;
+        // 武器与弹药
+        this.weapon = 'rifle';
+        this.mag = WEAPONS.rifle.magSize;
+        this.reserve = -1; // -1 = 无限备弹（步枪）
+        this.reloading = false;
+        this.reloadEnd = 0;
         this.meleeCooldown = GAME_CONFIG.MELEE_COOLDOWN; // 近战攻击冷却时间
         this.team = 0; // 0=无队伍（个人混战），1=红队，2=蓝队
         this.color = PLAYER_COLORS[(id - 1) % PLAYER_COLORS.length]; // 根据ID分配颜色（分队模式下由applyTeamColor覆盖）
@@ -887,6 +966,45 @@ class Player {
                 this.powerups[key].active = false;
             }
         });
+
+        // 完成换弹
+        if (this.reloading && now >= this.reloadEnd) {
+            this.reloading = false;
+            const magSize = WEAPONS[this.weapon].magSize;
+            const need = magSize - this.mag;
+            if (this.reserve < 0) {
+                this.mag = magSize;
+            } else {
+                const take = Math.min(need, this.reserve);
+                this.mag += take;
+                this.reserve -= take;
+            }
+        }
+    }
+
+    // 换上武器（拾取武器箱时调用）
+    equipWeapon(weaponId) {
+        const w = WEAPONS[weaponId];
+        if (!w) return;
+        this.weapon = weaponId;
+        this.mag = w.magSize;
+        this.reserve = w.reserve;
+        this.reloading = false;
+        this.reloadEnd = 0;
+    }
+
+    // 开始换弹；弹尽的特殊武器自动换回步枪
+    startReload() {
+        if (!this.isAlive || this.reloading) return;
+        const w = WEAPONS[this.weapon];
+        if (this.mag >= w.magSize) return;
+        if (this.reserve === 0) {
+            // 备弹耗尽：换回默认步枪
+            this.equipWeapon('rifle');
+            return;
+        }
+        this.reloading = true;
+        this.reloadEnd = Date.now() + w.reloadMs;
     }
     
     move(dx, dy) {
@@ -939,6 +1057,7 @@ class Player {
         this.health = GAME_CONFIG.MAX_HEALTH;
         this.isAlive = true;
         this.respawnTime = 0;
+        this.equipWeapon('rifle'); // 复活重置为默认武器
     }
 
     takeDamage(damage) {
@@ -957,26 +1076,30 @@ class Player {
     }
 
     canShoot() {
+        if (!this.isAlive || this.reloading) return false;
+        if (this.mag <= 0) return false;
         const now = Date.now();
-        let cooldown = this.shotCooldown;
-        
+        let cooldown = WEAPONS[this.weapon].fireRate;
+
         // 快速射击效果：减少50%冷却时间
         if (this.powerups.rapidFire.active) {
             cooldown = Math.floor(cooldown * 0.5);
         }
-        
-        const canShoot = this.isAlive && (now - this.lastShot) >= cooldown;
-        if (!canShoot) {
-            console.log(`射击冷却检查: 玩家${this.id}, 当前时间=${now}, 上次射击=${this.lastShot}, 时间差=${now - this.lastShot}, 冷却时间=${cooldown}`);
-        }
-        
-        return canShoot;
+
+        return (now - this.lastShot) >= cooldown;
     }
 
+    // 开火；返回子弹数组（霰弹枪一次多发），不可开火返回 null
     shoot(targetX, targetY) {
+        // 空仓时自动开始换弹
+        if (this.isAlive && !this.reloading && this.mag <= 0) {
+            this.startReload();
+            return null;
+        }
         if (!this.canShoot()) return null;
 
         this.lastShot = Date.now();
+        this.mag--;
         
         // 计算子弹方向
         const centerX = this.x + GAME_CONFIG.PLAYER_SIZE / 2;
@@ -1001,29 +1124,42 @@ class Player {
         }
         
         // 将子弹出生点前移，避免与自身或紧贴的墙体立即发生碰撞
+        const w = WEAPONS[this.weapon];
         const muzzleOffset = GAME_CONFIG.PLAYER_SIZE / 2 + 4;
         const startX = centerX + dirX * muzzleOffset;
         const startY = centerY + dirY * muzzleOffset;
-        const speed = GAME_CONFIG.BULLET_SPEED;
-        const vx = dirX * speed;
-        const vy = dirY * speed;
-        
+
         // 计算伤害
-        let damage = 25;
+        let damage = w.damage;
         if (this.powerups.damageBoost.active) {
             damage = Math.floor(damage * 1.5);
         }
-        
-        const bullet = new Bullet(
-            startX,
-            startY,
-            vx,
-            vy,
-            this.id,
-            damage
-        );
-        
-        return bullet;
+
+        // 按武器弹丸数与散布生成子弹（霰弹枪一次多发扇形）
+        const baseAngle = Math.atan2(dirY, dirX);
+        const bullets = [];
+        for (let i = 0; i < w.pellets; i++) {
+            let a = baseAngle;
+            if (w.pellets > 1) {
+                a += (i - (w.pellets - 1) / 2) * (w.spread / (w.pellets - 1) * 2)
+                    + (Math.random() - 0.5) * 0.04;
+            } else if (w.spread > 0) {
+                a += (Math.random() - 0.5) * w.spread;
+            }
+            bullets.push(new Bullet(
+                startX, startY,
+                Math.cos(a) * w.speed,
+                Math.sin(a) * w.speed,
+                this.id,
+                damage,
+                w.lifeMs
+            ));
+        }
+
+        // 打完最后一发自动换弹
+        if (this.mag <= 0) this.startReload();
+
+        return bullets;
     }
 
     canMelee() {
@@ -1124,7 +1260,7 @@ class Player {
 
 // 子弹类
 class Bullet {
-    constructor(x, y, vx, vy, ownerId, damage = 25) {
+    constructor(x, y, vx, vy, ownerId, damage = 25, lifeMs = 2000) {
         this.id = Date.now() + Math.random();
         this.x = x;
         this.y = y;
@@ -1132,7 +1268,7 @@ class Bullet {
         this.vy = vy;
         this.ownerId = ownerId;
         this.damage = damage;
-        this.life = 2000; // 2秒生命周期(毫秒)
+        this.life = lifeMs; // 生命周期(毫秒)；霰弹枪较短形成射程限制
         this.createdTime = Date.now();
     }
 
@@ -1170,6 +1306,10 @@ class Powerup {
                 return '#e74c3c'; // 红色
             case POWERUP_TYPES.HEAL:
                 return '#27ae60'; // 绿色
+            case POWERUP_TYPES.WEAPON_SMG:
+            case POWERUP_TYPES.WEAPON_SHOTGUN:
+            case POWERUP_TYPES.WEAPON_SNIPER:
+                return '#fbbf24'; // 金色：武器箱
             default:
                 return '#95a5a6'; // 灰色
         }
@@ -1184,7 +1324,13 @@ class Powerup {
             case POWERUP_TYPES.DAMAGE_BOOST:
                 return '●'; // 圆点，代表力量
             case POWERUP_TYPES.HEAL:
-                return '❤'; // 心形，代表回血
+                return '+'; // 十字，代表回血
+            case POWERUP_TYPES.WEAPON_SMG:
+                return '冲';
+            case POWERUP_TYPES.WEAPON_SHOTGUN:
+                return '霰';
+            case POWERUP_TYPES.WEAPON_SNIPER:
+                return '狙';
             default:
                 return '?';
         }
@@ -1226,6 +1372,7 @@ function addBot() {
         stuckY: spawn.y,
         aimErr: 0.6 + Math.random() * 0.5 // 个体差异：散布系数，避免机器人枪法一致
     });
+    const botWs = weaponNetState(player);
     broadcast({
         type: 'playerJoined',
         player: {
@@ -1239,7 +1386,11 @@ function addBot() {
             isAlive: player.isAlive,
             color: player.color,
             team: player.team,
-            powerups: player.powerups
+            powerups: player.powerups,
+            weapon: botWs.w,
+            mag: botWs.mag,
+            reserve: botWs.res,
+            reloadRem: botWs.rel
         }
     });
     return true;
@@ -1378,9 +1529,10 @@ function updateBots(now) {
                 const lead = Math.min(30, d * 0.12);
                 const tx = ex + (enemy.vx || 0) * lead + (Math.random() - 0.5) * d * 0.22 * bot.aimErr;
                 const ty = ey + (enemy.vy || 0) * lead + (Math.random() - 0.5) * d * 0.22 * bot.aimErr;
-                const bullet = me.shoot(tx, ty);
-                if (bullet) gameState.bullets.push(bullet);
-                bot.nextShot = now + 280 + Math.random() * 340;
+                const botBullets = me.shoot(tx, ty);
+                if (botBullets) botBullets.forEach(b => gameState.bullets.push(b));
+                const botRate = Math.max(WEAPONS[me.weapon].fireRate, 220);
+                bot.nextShot = now + botRate + Math.random() * 340;
             }
         } else if (wd > 8) {
             // 无敌人时面朝移动方向
@@ -1567,7 +1719,10 @@ function getPowerupTypeId(type) {
         'shield': 1,
         'rapid_fire': 2,
         'damage_boost': 3,
-        'heal': 4
+        'heal': 4,
+        'weapon_smg': 5,
+        'weapon_shotgun': 6,
+        'weapon_sniper': 7
     };
     return typeMap[type] || 0;
 }
@@ -1736,6 +1891,10 @@ function hasPlayerChanged(playerId, currentPlayer) {
         currentPlayer.health !== lastState.health ||
         currentPlayer.score !== lastState.score ||
         currentPlayer.isAlive !== lastState.isAlive ||
+        currentPlayer.weapon !== lastState.weapon ||
+        currentPlayer.mag !== lastState.mag ||
+        currentPlayer.reserve !== lastState.reserve ||
+        currentPlayer.reloading !== lastState.reloading ||
         JSON.stringify(currentPlayer.powerups) !== JSON.stringify(lastState.powerups)
     );
 }
@@ -1826,13 +1985,20 @@ function generateIncrementalUpdate() {
                 // 检查powerups变化
                 const powerupsChanged = JSON.stringify(player.powerups) !== JSON.stringify(lastState.powerups);
                 if (powerupsChanged) changes.powerups = player.powerups;
-                
+
+                // 检查武器/弹药变化
+                if (player.weapon !== lastState.weapon || player.mag !== lastState.mag ||
+                    player.reserve !== lastState.reserve || player.reloading !== lastState.reloading) {
+                    changes.weaponState = weaponNetState(player);
+                }
+
                 // 只在有实际变化时添加（除了id之外）
                 if (Object.keys(changes).length > 1) {
                     changedPlayers.push(changes);
                 }
             } else {
                 // 新玩家 - 优化精度
+                const ws = weaponNetState(player);
                 newPlayers.push({
                     id: player.id,
                     nickname: player.nickname,
@@ -1844,10 +2010,14 @@ function generateIncrementalUpdate() {
                     isAlive: player.isAlive,
                     color: player.color,
                     team: player.team || 0,
-                    powerups: player.powerups
+                    powerups: player.powerups,
+                    weapon: ws.w,
+                    mag: ws.mag,
+                    reserve: ws.res,
+                    reloadRem: ws.rel
                 });
             }
-            
+
             // 更新最后状态
             gameState.lastPlayerStates.set(player.id, {
                 x: player.x,
@@ -1856,6 +2026,10 @@ function generateIncrementalUpdate() {
                 health: player.health,
                 score: player.score,
                 isAlive: player.isAlive,
+                weapon: player.weapon,
+                mag: player.mag,
+                reserve: player.reserve,
+                reloading: player.reloading,
                 powerups: JSON.parse(JSON.stringify(player.powerups))
             });
         }
@@ -2255,6 +2429,11 @@ function handleMessage(ws, message) {
         case 'shoot':
             handleShoot(ws, message);
             break;
+        case 'reload': {
+            const rp = gameState.players.get(ws.playerId);
+            if (rp) rp.startReload();
+            break;
+        }
         case 'melee':
             handleMelee(ws, message);
             break;
@@ -2291,6 +2470,20 @@ function handleMessage(ws, message) {
                     } else {
                         const list = Object.keys(MAPS).map(k => `${k}=${MAPS[k].name}`).join('，');
                         content = `当前地图: ${(MAPS[matchConfig.mapId] || MAPS[DEFAULT_MAP_ID]).name}。可用地图: ${list}。输入 /map 地图ID 下一局切换`;
+                    }
+                    broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, timestamp: Date.now() });
+                    break;
+                }
+                // 武器指令：/weapon 武器ID 立即换枪（娱乐/调试）
+                if (cmdText.startsWith('/weapon')) {
+                    const arg = cmdText.slice(7).trim().toLowerCase();
+                    let content;
+                    if (WEAPONS[arg]) {
+                        chatPlayer.equipWeapon(arg);
+                        content = `${chatPlayer.nickname} 换上了「${WEAPONS[arg].name}」`;
+                    } else {
+                        const list = WEAPON_IDS.map(k => `${k}=${WEAPONS[k].name}`).join('，');
+                        content = `可用武器: ${list}。输入 /weapon 武器ID 切换`;
                     }
                     broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, timestamp: Date.now() });
                     break;
@@ -2403,6 +2596,7 @@ function handleJoin(ws, message) {
     }
     
     // 广播新玩家加入
+    const joinWs = weaponNetState(player);
     broadcast({
         type: 'playerJoined',
         player: {
@@ -2416,7 +2610,11 @@ function handleJoin(ws, message) {
             isAlive: player.isAlive,
             color: player.color,
             team: player.team,
-            powerups: player.powerups
+            powerups: player.powerups,
+            weapon: joinWs.w,
+            mag: joinWs.mag,
+            reserve: joinWs.res,
+            reloadRem: joinWs.rel
         }
     }, playerId);
     
@@ -2474,16 +2672,11 @@ function handleShoot(ws, message) {
     
     console.log(`玩家 ${player.nickname} 射击到 (${targetX}, ${targetY})`);
     
-    const bullet = player.shoot(targetX, targetY);
-    
-    if (bullet) {
-        gameState.bullets.push(bullet);
-        console.log(`子弹创建成功: ID=${bullet.id}, 位置=(${bullet.x}, ${bullet.y}), 速度=(${bullet.vx}, ${bullet.vy})`);
-        
+    const bullets = player.shoot(targetX, targetY);
+
+    if (bullets && bullets.length) {
+        bullets.forEach(b => gameState.bullets.push(b));
         // 子弹将通过游戏状态更新自动发送给客户端，无需重复广播
-        console.log('子弹已加入游戏状态，将在下次更新中发送给所有客户端');
-    } else {
-        console.log('子弹创建失败: 可能还在冷却中');
     }
 }
 
@@ -2712,13 +2905,20 @@ function generateTerrain(mapId) {
 
 // 生成道具
 function spawnPowerup() {
-    // 限制同时存在的道具数量不超过4个
-    if (gameState.powerups.length >= 4) {
+    // 限制同时存在的道具箱数量不超过5个
+    if (gameState.powerups.length >= 5) {
         return;
     }
-    
-    const types = Object.values(POWERUP_TYPES);
-    const type = types[Math.floor(Math.random() * types.length)];
+
+    // 45% 武器箱 / 55% 增益箱
+    let type;
+    if (Math.random() < 0.45) {
+        const weapons = [POWERUP_TYPES.WEAPON_SMG, POWERUP_TYPES.WEAPON_SHOTGUN, POWERUP_TYPES.WEAPON_SNIPER];
+        type = weapons[Math.floor(Math.random() * weapons.length)];
+    } else {
+        const buffs = [POWERUP_TYPES.SHIELD, POWERUP_TYPES.RAPID_FIRE, POWERUP_TYPES.DAMAGE_BOOST, POWERUP_TYPES.HEAL];
+        type = buffs[Math.floor(Math.random() * buffs.length)];
+    }
     
     // 尝试多次生成道具，确保不在地形内
     let attempts = 0;
@@ -2730,7 +2930,8 @@ function spawnPowerup() {
         y = Math.random() * (GAME_CONFIG.CANVAS_HEIGHT - GAME_CONFIG.POWERUP_SIZE);
         
         // 检查是否与地形碰撞
-        if (!checkTerrainCollision(x, y, GAME_CONFIG.POWERUP_SIZE, GAME_CONFIG.POWERUP_SIZE)) {
+        // 四周留 20px 空隙，避免贴墙难拾取
+        if (!checkTerrainCollision(x - 20, y - 20, GAME_CONFIG.POWERUP_SIZE + 40, GAME_CONFIG.POWERUP_SIZE + 40)) {
             // 检查是否与玩家碰撞
             let playerCollision = false;
             gameState.players.forEach(player => {
@@ -2810,21 +3011,24 @@ function checkPowerupPickup() {
                     const now = Date.now();
                     const duration = GAME_CONFIG.POWERUP_DURATION;
                     
-                    switch (powerup.type) {
-                        case POWERUP_TYPES.SHIELD:
-                            player.powerups.shield = { active: true, endTime: now + duration };
-                            break;
-                        case POWERUP_TYPES.RAPID_FIRE:
-                            player.powerups.rapidFire = { active: true, endTime: now + duration };
-                            break;
-                        case POWERUP_TYPES.DAMAGE_BOOST:
-                            player.powerups.damageBoost = { active: true, endTime: now + duration };
-                            break;
-                        case POWERUP_TYPES.HEAL:
-                            // 回血道具立即生效
-                            const healAmount = Math.floor(GAME_CONFIG.MAX_HEALTH);
-                            player.health = Math.min(GAME_CONFIG.MAX_HEALTH, player.health + healAmount);
-                            break;
+                    const weaponId = powerupWeapon(powerup.type);
+                    if (weaponId) {
+                        player.equipWeapon(weaponId);
+                    } else {
+                        switch (powerup.type) {
+                            case POWERUP_TYPES.SHIELD:
+                                player.powerups.shield = { active: true, endTime: now + duration };
+                                break;
+                            case POWERUP_TYPES.RAPID_FIRE:
+                                player.powerups.rapidFire = { active: true, endTime: now + duration };
+                                break;
+                            case POWERUP_TYPES.DAMAGE_BOOST:
+                                player.powerups.damageBoost = { active: true, endTime: now + duration };
+                                break;
+                            case POWERUP_TYPES.HEAL:
+                                player.health = Math.min(GAME_CONFIG.MAX_HEALTH, player.health + GAME_CONFIG.MAX_HEALTH);
+                                break;
+                        }
                     }
                     
                     // 广播道具拾取
@@ -2893,7 +3097,7 @@ function processBulletCollisions(bullet) {
                         const killInfo = {
                             killer: shooter.nickname,
                             victim: player.nickname,
-                            weapon: '射杀',
+                            weapon: (WEAPONS[shooter.weapon] || WEAPONS.rifle).name,
                             timestamp: Date.now()
                         };
                         gameState.killFeed.push(killInfo);

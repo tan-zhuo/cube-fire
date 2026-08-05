@@ -8,7 +8,8 @@ const MESSAGE_TYPES = {
     RESPAWN: 5,
     CHAT: 6,
     PING: 7,
-    
+    RELOAD: 8,
+
     // 服务器发送
     JOINED: 10,
     PLAYER_JOINED: 11,
@@ -289,6 +290,9 @@ class Effect {
         this.type = type;
         this.duration = duration;
         this.angle = opts.angle || 0;
+        this.weapon = opts.weapon || 'rifle';
+        this.color = opts.color || '#fbbf24';
+        this.label = opts.label || '';
         this.startTime = Date.now();
         this.particles = [];
         this.createParticles();
@@ -297,12 +301,16 @@ class Effect {
     createParticles() {
         switch (this.type) {
             case 'shoot': {
-                // 枪口喷火：沿射击方向的窄锥形火花 + 亮芯，短促消散
+                // 枪口喷火：沿射击方向的窄锥形火花 + 亮芯，样式随武器
                 const dir = this.angle;
                 const colors = ['#fff6d5', '#ffd27f', '#f39c12', '#ff8c42'];
-                for (let i = 0; i < 7; i++) {
-                    const a = dir + (Math.random() - 0.5) * 0.55;
-                    const speed = 2.5 + Math.random() * 3.5;
+                let count = 7, cone = 0.55, speedMul = 1;
+                if (this.weapon === 'shotgun') { count = 13; cone = 1.05; }
+                else if (this.weapon === 'smg') { count = 5; cone = 0.5; }
+                else if (this.weapon === 'sniper') { count = 8; cone = 0.28; speedMul = 1.7; }
+                for (let i = 0; i < count; i++) {
+                    const a = dir + (Math.random() - 0.5) * cone;
+                    const speed = (2.5 + Math.random() * 3.5) * speedMul;
                     this.particles.push(new Particle(
                         this.x, this.y,
                         Math.cos(a) * speed,
@@ -315,8 +323,24 @@ class Effect {
                 this.particles.push(new Particle(
                     this.x, this.y,
                     Math.cos(dir) * 0.5, Math.sin(dir) * 0.5,
-                    '#ffffff', 6, 3
+                    '#ffffff', 6, this.weapon === 'shotgun' ? 4 : 3
                 ));
+                break;
+            }
+            case 'crate': {
+                // 开箱：内容色碎片爆裂 + 白色亮片（光环与浮字在 draw 中绘制）
+                for (let i = 0; i < 14; i++) {
+                    const a = Math.random() * Math.PI * 2;
+                    const speed = 1.5 + Math.random() * 3.5;
+                    this.particles.push(new Particle(
+                        this.x, this.y,
+                        Math.cos(a) * speed,
+                        Math.sin(a) * speed - 0.8,
+                        Math.random() < 0.35 ? '#ffffff' : this.color,
+                        22 + ((Math.random() * 14) | 0),
+                        1.5 + Math.random() * 2
+                    ));
+                }
                 break;
             }
             case 'hit':
@@ -405,6 +429,33 @@ class Effect {
 
     draw(ctx) {
         this.particles.forEach(particle => particle.draw(ctx));
+
+        // 开箱附加表现：扩散光环 + 内容名浮字
+        if (this.type === 'crate') {
+            const p = Math.min(1, (Date.now() - this.startTime) / this.duration);
+            ctx.save();
+            // 光环
+            if (p < 0.6) {
+                ctx.globalAlpha = (1 - p / 0.6) * 0.55;
+                ctx.strokeStyle = this.color;
+                ctx.lineWidth = 2.5;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 8 + p * 55, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            // 内容名上浮
+            if (this.label) {
+                ctx.globalAlpha = 1 - p;
+                ctx.font = 'bold 14px system-ui, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = 'rgba(4, 8, 15, 0.85)';
+                ctx.strokeText(this.label, this.x, this.y - 18 - p * 26);
+                ctx.fillStyle = this.color;
+                ctx.fillText(this.label, this.x, this.y - 18 - p * 26);
+            }
+            ctx.restore();
+        }
     }
 
     isDead() {
@@ -547,12 +598,18 @@ class GameClient {
     setupEventListeners() {
         // 键盘事件
         document.addEventListener('keydown', (e) => {
+            if (e.target.matches && e.target.matches('input, textarea')) return;
             this.keys[e.key.toLowerCase()] = true;
-            
+
             // 复活键
             if (e.code === 'Space') {
                 e.preventDefault();
                 this.respawn();
+            }
+
+            // R 键换弹
+            if ((e.key === 'r' || e.key === 'R') && this.playerId) {
+                this.sendReload();
             }
         });
 
@@ -573,11 +630,17 @@ class GameClient {
             this.mouse.y = Math.max(0, Math.min(800, this.mouse.y));
         });
 
-        this.canvas.addEventListener('click', (e) => {
-            if (this.playerId && this.players.get(this.playerId)?.isAlive) {
-                this.shoot();
+        // 左键按住连发（射速由当前武器决定，见 handleAutoFire）
+        this.canvas.addEventListener('mousedown', (e) => {
+            if (e.button === 0) {
+                this.mouseDown = true;
+                this.handleAutoFire(); // 按下立即尝试开火
             }
         });
+        document.addEventListener('mouseup', (e) => {
+            if (e.button === 0) this.mouseDown = false;
+        });
+        this.canvas.addEventListener('mouseleave', () => { this.mouseDown = false; });
 
         // 右键近战攻击
         this.canvas.addEventListener('contextmenu', (e) => {
@@ -834,6 +897,10 @@ class GameClient {
                     const shieldActive = decoder.readUint8() === 1;
                     const rapidActive = decoder.readUint8() === 1;
                     const damageActive = decoder.readUint8() === 1;
+                    const wIdx = decoder.readUint8();
+                    const wMag = decoder.readUint8();
+                    const wRes = decoder.readUint8();
+                    const wRel = decoder.readUint16();
 
                     // 若非快照且未提供昵称，则尝试复用已有昵称
                     if (!isSnapshot) {
@@ -841,14 +908,16 @@ class GameClient {
                         nickname = exist?.nickname || `Player ${id}`;
                     }
 
-                    players.push({
+                    const pObj = {
                         id, nickname, x, y, angle, health, score, isAlive, color, team,
                         powerups: {
                             shield: { active: shieldActive, endTime: shieldActive ? nowForBuffs + defaultBuffMs : 0 },
                             rapidFire: { active: rapidActive, endTime: rapidActive ? nowForBuffs + defaultBuffMs : 0 },
                             damageBoost: { active: damageActive, endTime: damageActive ? nowForBuffs + defaultBuffMs : 0 }
                         }
-                    });
+                    };
+                    this.applyWeaponNet(pObj, wIdx, wMag, wRes, wRel);
+                    players.push(pObj);
                 }
 
                 // 子弹
@@ -961,8 +1030,12 @@ class GameClient {
                             const isAlive = decoder.readUint8() === 1;
                             const color = decoder.readString();
                             const team = decoder.readUint8();
+                            const wIdx = decoder.readUint8();
+                            const wMag = decoder.readUint8();
+                            const wRes = decoder.readUint8();
+                            const wRel = decoder.readUint16();
                             const nowTs = Date.now();
-                            this.players.set(id, {
+                            const np = {
                                 id,
                                 nickname,
                                 x,
@@ -981,7 +1054,9 @@ class GameClient {
                                 lastServerUpdate: nowTs,
                                 serverVx: 0,
                                 serverVy: 0
-                            });
+                            };
+                            this.applyWeaponNet(np, wIdx, wMag, wRes, wRel);
+                            this.players.set(id, np);
                         }
                     } else if (section === 0x02) { // changedPlayers
                         const n = decoder.readUint16();
@@ -1047,6 +1122,13 @@ class GameClient {
                                 cur.powerups.damageBoost.active = dActive;
                                 cur.powerups.damageBoost.endTime = dActive ? now + dRem * 1000 : 0;
                             }
+                            if (mask & 0x80) { // 武器/弹药状态
+                                const wIdx = decoder.readUint8();
+                                const wMag = decoder.readUint8();
+                                const wRes = decoder.readUint8();
+                                const wRel = decoder.readUint16();
+                                this.applyWeaponNet(cur, wIdx, wMag, wRes, wRel);
+                            }
                             this.players.set(id, cur);
                         }
                     } else if (section === 0x03) { // newBullets
@@ -1060,11 +1142,7 @@ class GameClient {
                             const ownerId = decoder.readUint32();
                             if (!this.bullets.find(b => b.id === id)) {
                                 this.bullets.push({ id, x, y, vx, vy, ownerId, damage: 25 });
-                                if (ownerId !== this.playerId) {
-                                    if (window.gameSound) window.gameSound.shoot(this.volFor(x, y) * 0.6);
-                                    // 远端玩家的枪口火光（子弹出生点即枪口）
-                                    this.effects.push(new Effect(x, y, 'shoot', 300, { angle: Math.atan2(vy, vx) }));
-                                }
+                                if (ownerId !== this.playerId) this.remoteShotFx(x, y, vx, vy, ownerId);
                             }
                         }
                     } else if (section === 0x13) { // removedBullets
@@ -1149,7 +1227,11 @@ class GameClient {
                 const isAlive = decoder.readUint8() === 1;
                 const color = decoder.readString();
                 const team = decoder.readUint8();
-                this.players.set(id, {
+                const wIdx = decoder.readUint8();
+                const wMag = decoder.readUint8();
+                const wRes = decoder.readUint8();
+                const wRel = decoder.readUint16();
+                const jp = {
                     id,
                     nickname,
                     x,
@@ -1161,7 +1243,9 @@ class GameClient {
                     color,
                     team,
                     powerups: { shield: {active:false}, rapidFire:{active:false}, damageBoost:{active:false} }
-                });
+                };
+                this.applyWeaponNet(jp, wIdx, wMag, wRes, wRel);
+                this.players.set(id, jp);
                 this.updateScoreboard();
                 return;
             }
@@ -1263,7 +1347,15 @@ class GameClient {
                             pickedUpPlayer.x + 10, pickedUpPlayer.y - 8, '+HP', '#5dde9a'
                         ));
                     }
-                    this.effects.push(new Effect(pickedUpPlayer.x + 10, pickedUpPlayer.y + 10, 'powerup'));
+                    // 开箱揭示：内容色爆裂 + 光环 + 内容名浮字
+                    const revealColor = ({
+                        shield: '#9b59b6', rapid_fire: '#e67e22', damage_boost: '#e74c3c',
+                        heal: '#2ecc71', weapon_smg: '#fbbf24', weapon_shotgun: '#fbbf24', weapon_sniper: '#fbbf24'
+                    })[type] || '#fbbf24';
+                    this.effects.push(new Effect(
+                        pickedUpPlayer.x + 10, pickedUpPlayer.y + 10, 'crate', 900,
+                        { color: revealColor, label: this.powerupName(type) }
+                    ));
                     // 本地立即设置buff，保证UI立刻显示
                     const now = Date.now();
                     const duration = (this.gameConfig && this.gameConfig.POWERUP_DURATION) || 15000;
@@ -1315,7 +1407,69 @@ class GameClient {
             case 2: return 'rapid_fire';
             case 3: return 'damage_boost';
             case 4: return 'heal';
+            case 5: return 'weapon_smg';
+            case 6: return 'weapon_shotgun';
+            case 7: return 'weapon_sniper';
             default: return 'unknown';
+        }
+    }
+
+    // ---------- 武器辅助 ----------
+    weaponIdName(idx) {
+        const ids = (this.gameConfig && this.gameConfig.WEAPON_IDS) || ['rifle', 'smg', 'shotgun', 'sniper'];
+        return ids[idx] || 'rifle';
+    }
+
+    weaponConf(idx) {
+        const W = (this.gameConfig && this.gameConfig.WEAPONS) || {};
+        return W[this.weaponIdName(idx)] || { name: '步枪', fireRate: 200, magSize: 30, reloadMs: 1500 };
+    }
+
+    // 应用来自服务器的武器状态（w=武器索引 mag=弹夹 res=备弹(255=∞) rel=换弹剩余ms）
+    applyWeaponNet(p, w, mag, res, rel) {
+        p.weapon = w;
+        p.mag = mag;
+        p.reserve = res;
+        if (rel > 0) {
+            p.reloadEnd = Date.now() + rel;
+            p.reloadTotal = this.weaponConf(w).reloadMs || 1500;
+        } else {
+            p.reloadEnd = 0;
+        }
+    }
+
+    // 弹药 HUD（每帧刷新）
+    updateAmmoHUD() {
+        const nameEl = document.getElementById('weaponName');
+        const ammoEl = document.getElementById('ammoText');
+        if (!nameEl || !ammoEl || !this.playerId) return;
+        const me = this.players.get(this.playerId);
+        if (!me) return;
+        const conf = this.weaponConf(me.weapon || 0);
+        nameEl.textContent = conf.name || '步枪';
+        const now = Date.now();
+        if (me.reloadEnd && me.reloadEnd > now) {
+            const total = me.reloadTotal || conf.reloadMs || 1500;
+            const pct = Math.max(0, Math.min(99, Math.round((1 - (me.reloadEnd - now) / total) * 100)));
+            ammoEl.textContent = `换弹 ${pct}%`;
+        } else {
+            const mag = me.mag !== undefined ? me.mag : (conf.magSize || 30);
+            const res = (me.reserve === undefined || me.reserve === 255) ? '∞' : me.reserve;
+            ammoEl.textContent = `${mag} / ${res}`;
+        }
+    }
+
+    // 道具箱内容的中文名（拾取揭示用）
+    powerupName(type) {
+        switch (type) {
+            case 'shield': return '护盾';
+            case 'rapid_fire': return '急速射击';
+            case 'damage_boost': return '伤害强化';
+            case 'heal': return '满血恢复';
+            case 'weapon_smg': return '冲锋枪';
+            case 'weapon_shotgun': return '霰弹枪';
+            case 'weapon_sniper': return '狙击枪';
+            default: return '道具';
         }
     }
 
@@ -1380,6 +1534,14 @@ class GameClient {
                 // 队伍与颜色（回合切换分队模式时会变化）
                 if (serverPlayer.team !== undefined) localPlayer.team = serverPlayer.team;
                 if (serverPlayer.color) localPlayer.color = serverPlayer.color;
+                // 武器状态
+                if (serverPlayer.weapon !== undefined) {
+                    localPlayer.weapon = serverPlayer.weapon;
+                    localPlayer.mag = serverPlayer.mag;
+                    localPlayer.reserve = serverPlayer.reserve;
+                    localPlayer.reloadEnd = serverPlayer.reloadEnd || 0;
+                    if (serverPlayer.reloadTotal) localPlayer.reloadTotal = serverPlayer.reloadTotal;
+                }
                 // 合并buff状态，避免全量更新时重置计时
                 const now = Date.now();
                 const defaultBuffMs = (this.gameConfig && this.gameConfig.POWERUP_DURATION) ? this.gameConfig.POWERUP_DURATION : 15000;
@@ -1444,17 +1606,25 @@ class GameClient {
         // 处理新玩家
         if (message.newPlayers) {
             message.newPlayers.forEach(player => {
+                if (player.weapon !== undefined) {
+                    this.applyWeaponNet(player, player.weapon, player.mag, player.reserve, player.reloadRem || 0);
+                }
                 this.players.set(player.id, player);
             });
         }
-        
+
         // 处理玩家变化
         if (message.changedPlayers) {
             message.changedPlayers.forEach(changes => {
                 const player = this.players.get(changes.id);
                 if (player) {
-                    // 更新变化的属性
-                    Object.assign(player, changes);
+                    // 武器状态单独应用（JSON 路径）
+                    if (changes.weaponState) {
+                        const ws = changes.weaponState;
+                        this.applyWeaponNet(player, ws.w, ws.mag, ws.res, ws.rel);
+                    }
+                    const { weaponState, ...rest } = changes;
+                    Object.assign(player, rest);
                 }
             });
         }
@@ -1466,9 +1636,7 @@ class GameClient {
                 if (!this.bullets.find(b => b.id === bullet.id)) {
                     this.bullets.push(bullet);
                     if (bullet.ownerId !== this.playerId) {
-                        this.effects.push(new Effect(bullet.x, bullet.y, 'shoot', 300, {
-                            angle: Math.atan2(bullet.vy || 0, bullet.vx || 0)
-                        }));
+                        this.remoteShotFx(bullet.x, bullet.y, bullet.vx || 0, bullet.vy || 0, bullet.ownerId);
                     }
                 }
             });
@@ -1874,44 +2042,73 @@ class GameClient {
         });
     }
 
+    // 道具箱：2.5D 悬浮补给箱（内容未知，拾取时揭示）
     drawPowerup(powerup) {
         if (!powerup) return;
-        const size = this.gameConfig ? this.gameConfig.POWERUP_SIZE : 15;
-        const x = powerup.x, y = powerup.y;
-        const vis = this.getPowerupVisual(powerup.type || 'unknown');
-        const color = powerup.color || vis.color;
-        const icon = powerup.icon || vis.icon;
+        const ctx = this.backCtx;
+        const s = 22; // 箱体边长
+        const time = Date.now();
+        const bob = Math.sin(time * 0.003 + (powerup.id % 10)) * 2.5; // 悬浮起伏
+        const cx = powerup.x + s / 2;
+        const baseY = powerup.y + s / 2;
+        const topY = baseY - 6 + bob; // 箱顶中心
+        const ex = 7; // 挤出高度
 
-        this.backCtx.save();
-        // 发光背景
-        const glow = this.backCtx.createRadialGradient(
-            x + size / 2, y + size / 2, size * 0.2,
-            x + size / 2, y + size / 2, size
-        );
-        glow.addColorStop(0, color + '88');
-        glow.addColorStop(1, color + '00');
-        this.backCtx.fillStyle = glow;
-        this.backCtx.beginPath();
-        this.backCtx.arc(x + size / 2, y + size / 2, size * 0.8, 0, Math.PI * 2);
-        this.backCtx.fill();
+        ctx.save();
 
-        // 核心实体
-        this.backCtx.fillStyle = color;
-        this.backCtx.strokeStyle = '#ffffff55';
-        this.backCtx.lineWidth = 2;
-        this.backCtx.beginPath();
-        this.backCtx.arc(x + size / 2, y + size / 2, size / 2, 0, Math.PI * 2);
-        this.backCtx.fill();
-        this.backCtx.stroke();
+        // 地面光圈（呼吸脉动）
+        const pulse = 0.5 + Math.sin(time * 0.004 + powerup.id) * 0.2;
+        ctx.globalAlpha = pulse;
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.ellipse(cx, baseY + s / 2 + 3, s * 0.75, s * 0.28, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        // 投影
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.ellipse(cx, baseY + s / 2 + 3, s * 0.55 - bob * 0.06 * s, s * 0.2, 0, 0, Math.PI * 2);
+        ctx.fill();
 
-        // 图标
-        this.backCtx.fillStyle = '#ffffff';
-        this.backCtx.font = `${Math.round(size * 0.8)}px Arial`;
-        this.backCtx.textAlign = 'center';
-        this.backCtx.textBaseline = 'middle';
-        this.backCtx.fillText(icon, x + size / 2, y + size / 2 + 1);
+        // 箱体（2.5D 挤出：亮顶面 + 暗侧面）
+        ctx.globalAlpha = 1;
+        const x0 = cx - s / 2, y0 = topY - s / 2;
+        // 侧面
+        ctx.fillStyle = '#3d3325';
+        ctx.fillRect(x0, y0 + s - ex, s, ex);
+        // 顶面
+        const topGrad = ctx.createLinearGradient(x0, y0 - ex, x0, y0 + s - ex);
+        topGrad.addColorStop(0, '#8a6f3d');
+        topGrad.addColorStop(1, '#5d4a29');
+        ctx.fillStyle = topGrad;
+        ctx.fillRect(x0, y0 - ex, s, s);
+        // 描边与箱盖缝
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x0 + 0.5, y0 - ex + 0.5, s - 1, s - 1);
+        ctx.strokeStyle = 'rgba(251, 191, 36, 0.65)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0 - ex + s * 0.32);
+        ctx.lineTo(x0 + s, y0 - ex + s * 0.32);
+        ctx.stroke();
+        // 金属包角
+        ctx.fillStyle = '#c9a75c';
+        const c = 3.5;
+        ctx.fillRect(x0, y0 - ex, c, c);
+        ctx.fillRect(x0 + s - c, y0 - ex, c, c);
+        ctx.fillRect(x0, y0 - ex + s - c, c, c);
+        ctx.fillRect(x0 + s - c, y0 - ex + s - c, c, c);
 
-        this.backCtx.restore();
+        // 中央问号（内容未知）
+        ctx.fillStyle = '#ffe9b3';
+        ctx.font = `bold ${Math.round(s * 0.62)}px system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('?', cx, y0 - ex + s * 0.62);
+
+        ctx.restore();
     }
 
     startGameLoop() {
@@ -1954,7 +2151,11 @@ class GameClient {
         
         // 更新玩家移动
         this.updatePlayerMovement();
-        
+
+        // 按住左键连发 + 弹药HUD
+        this.handleAutoFire();
+        this.updateAmmoHUD();
+
         // 他人按帧平滑靠拢 + 轻量外推（减少观众端漂移感）
         const nowMs = Date.now();
         const dtMs = Math.max(0, deltaTime);
@@ -2153,36 +2354,83 @@ class GameClient {
         return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
     }
 
+    // 按住左键连发：按当前武器射速节流，空仓/换弹时播放空击声
+    handleAutoFire() {
+        if (!this.mouseDown || !this.playerId) return;
+        const me = this.players.get(this.playerId);
+        if (!me || !me.isAlive) return;
+        const now = Date.now();
+        const conf = this.weaponConf(me.weapon || 0);
+        let rate = conf.fireRate || 200;
+        if (me.powerups && me.powerups.rapidFire && me.powerups.rapidFire.active) {
+            rate = Math.floor(rate * 0.5);
+        }
+        if (now - (this.lastClientShot || 0) < rate) return;
+        if ((me.reloadEnd && me.reloadEnd > now) || (me.mag !== undefined && me.mag <= 0)) {
+            if (now - (this.lastEmptyClick || 0) > 300) {
+                this.lastEmptyClick = now;
+                if (window.gameSound) window.gameSound.emptyClick();
+            }
+            return;
+        }
+        this.lastClientShot = now;
+        this.shoot();
+        // 本地预测弹药消耗，让 HUD 即时反馈（服务器状态会覆盖校正）
+        if (me.mag !== undefined) me.mag = Math.max(0, me.mag - 1);
+    }
+
+    sendReload() {
+        const me = this.players.get(this.playerId);
+        if (!me || !me.isAlive || !this.ws) return;
+        const now = Date.now();
+        if (me.reloadEnd && me.reloadEnd > now) return;
+        const conf = this.weaponConf(me.weapon || 0);
+        if (me.mag !== undefined && me.mag >= (conf.magSize || 30)) return;
+        const enc = new BinaryEncoder().init(4);
+        enc.writeUint8(MESSAGE_TYPES.RELOAD);
+        this.ws.send(enc.getBuffer());
+        // 本地预测换弹开始（服务器状态会校正）
+        me.reloadEnd = now + (conf.reloadMs || 1500);
+        me.reloadTotal = conf.reloadMs || 1500;
+        if (window.gameSound) window.gameSound.reload();
+    }
+
     shoot() {
-        if (!this.playerId) {
-            console.log('射击失败: 没有玩家ID');
-            return;
-        }
-        
+        if (!this.playerId) return;
+
         const player = this.players.get(this.playerId);
-        if (!player || !player.isAlive) {
-            console.log('射击失败: 玩家不存在或已死亡');
-            return;
-        }
-        
-        
-        // 枪口喷火特效（定位到枪管尖端，沿瞄准方向）
+        if (!player || !player.isAlive) return;
+
+        // 枪口喷火特效（定位到枪管尖端，沿瞄准方向，样式随武器）
         const size = (this.gameConfig && this.gameConfig.PLAYER_SIZE) || 20;
         const ang = player.angle || 0;
         const muzzle = size / 2 + 7; // 枪管画到 size/2+7，尖端即枪口
+        const wname = this.weaponIdName(player.weapon || 0);
         this.effects.push(new Effect(
             player.x + size / 2 + Math.cos(ang) * muzzle,
             player.y + size / 2 + Math.sin(ang) * muzzle,
-            'shoot', 300, { angle: ang }
+            'shoot', 300, { angle: ang, weapon: wname }
         ));
-        if (window.gameSound) window.gameSound.shoot(1);
-        this.addShake(1.5);
-        
+        if (window.gameSound) window.gameSound.shoot(1, wname);
+        this.addShake(wname === 'shotgun' || wname === 'sniper' ? 3 : 1.5);
+
         const enc = new BinaryEncoder().init(24);
         enc.writeUint8(MESSAGE_TYPES.SHOOT);
         enc.writeFloat32(this.mouse.x);
         enc.writeFloat32(this.mouse.y);
         this.ws.send(enc.getBuffer());
+    }
+
+    // 远端玩家开火表现（同一玩家 60ms 内的多颗弹丸只播一次，霰弹枪不会炸音）
+    remoteShotFx(x, y, vx, vy, ownerId) {
+        const now = Date.now();
+        this._remoteFlashAt = this._remoteFlashAt || new Map();
+        if (now - (this._remoteFlashAt.get(ownerId) || 0) < 60) return;
+        this._remoteFlashAt.set(ownerId, now);
+        const owner = this.players.get(ownerId);
+        const wname = this.weaponIdName((owner && owner.weapon) || 0);
+        if (window.gameSound) window.gameSound.shoot(this.volFor(x, y) * 0.6, wname);
+        this.effects.push(new Effect(x, y, 'shoot', 300, { angle: Math.atan2(vy, vx), weapon: wname }));
     }
 
     meleeAttack() {
@@ -2526,11 +2774,48 @@ class GameClient {
         this.backCtx.lineWidth = 1.5;
         this.backCtx.strokeRect(-size / 2, -size / 2, size, size);
         
-        // 枪管方向指示器
+        // 枪械外观（随武器变化）
+        const wIdx = player.weapon || 0;
         this.backCtx.fillStyle = '#e8edf5';
-        this.backCtx.fillRect(size / 2 - 2, -2.5, 9, 5);
-        
+        if (wIdx === 1) {
+            // 冲锋枪：短枪管 + 下挂弹匣
+            this.backCtx.fillRect(size / 2 - 2, -2, 8, 4);
+            this.backCtx.fillStyle = '#9aa4b4';
+            this.backCtx.fillRect(size / 2 + 1, 2, 3, 4.5);
+        } else if (wIdx === 2) {
+            // 霰弹枪：粗短双管 + 木质护木
+            this.backCtx.fillRect(size / 2 - 2, -3.5, 10, 3);
+            this.backCtx.fillRect(size / 2 - 2, 0.5, 10, 3);
+            this.backCtx.fillStyle = '#8a5a2b';
+            this.backCtx.fillRect(size / 2 - 3, -2.5, 3.5, 5);
+        } else if (wIdx === 3) {
+            // 狙击枪：细长枪管 + 瞄具
+            this.backCtx.fillRect(size / 2 - 2, -1.5, 17, 3);
+            this.backCtx.fillStyle = '#38bdf8';
+            this.backCtx.fillRect(size / 2 + 3, -4.5, 4.5, 2.5);
+        } else {
+            // 步枪：默认枪管
+            this.backCtx.fillRect(size / 2 - 2, -2.5, 9, 5);
+        }
+
         this.backCtx.restore();
+
+        // 换弹进度环（所有玩家可见）
+        if (player.isAlive && player.reloadEnd && player.reloadEnd > Date.now()) {
+            const total = player.reloadTotal || 1500;
+            const frac = Math.max(0, Math.min(1, 1 - (player.reloadEnd - Date.now()) / total));
+            this.backCtx.save();
+            this.backCtx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+            this.backCtx.lineWidth = 2.5;
+            this.backCtx.beginPath();
+            this.backCtx.arc(player.x + size / 2, player.y + size / 2, size * 0.95, 0, Math.PI * 2);
+            this.backCtx.stroke();
+            this.backCtx.strokeStyle = '#f1f5f9';
+            this.backCtx.beginPath();
+            this.backCtx.arc(player.x + size / 2, player.y + size / 2, size * 0.95, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+            this.backCtx.stroke();
+            this.backCtx.restore();
+        }
         
         // 绘制血条
         if (player.isAlive) {
