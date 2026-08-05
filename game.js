@@ -1441,21 +1441,28 @@ class GameClient {
     // 弹药 HUD（每帧刷新）
     updateAmmoHUD() {
         const nameEl = document.getElementById('weaponName');
-        const ammoEl = document.getElementById('ammoText');
-        if (!nameEl || !ammoEl || !this.playerId) return;
+        const magEl = document.getElementById('ammoMag');
+        const resEl = document.getElementById('ammoReserve');
+        if (!nameEl || !magEl || !resEl || !this.playerId) return;
         const me = this.players.get(this.playerId);
         if (!me) return;
         const conf = this.weaponConf(me.weapon || 0);
-        nameEl.textContent = conf.name || '步枪';
         const now = Date.now();
-        if (me.reloadEnd && me.reloadEnd > now) {
+        const reloading = !!(me.reloadEnd && me.reloadEnd > now);
+
+        nameEl.textContent = reloading ? '换弹中' : (conf.name || '步枪');
+        magEl.textContent = me.mag !== undefined ? me.mag : (conf.magSize || 30);
+        resEl.textContent = '/ ' + ((me.reserve === undefined || me.reserve === 255) ? '∞' : me.reserve);
+
+        const uiRoot = document.getElementById('ui');
+        if (uiRoot) uiRoot.classList.toggle('reloading', reloading);
+        const track = document.getElementById('reloadTrack');
+        const fill = document.getElementById('reloadFill');
+        if (track) track.classList.toggle('hidden', !reloading);
+        if (reloading && fill) {
             const total = me.reloadTotal || conf.reloadMs || 1500;
-            const pct = Math.max(0, Math.min(99, Math.round((1 - (me.reloadEnd - now) / total) * 100)));
-            ammoEl.textContent = `换弹 ${pct}%`;
-        } else {
-            const mag = me.mag !== undefined ? me.mag : (conf.magSize || 30);
-            const res = (me.reserve === undefined || me.reserve === 255) ? '∞' : me.reserve;
-            ammoEl.textContent = `${mag} / ${res}`;
+            const pct = Math.max(0, Math.min(100, (1 - (me.reloadEnd - now) / total) * 100));
+            fill.style.width = pct + '%';
         }
     }
 
@@ -1743,16 +1750,16 @@ class GameClient {
 
     updateGameTimer(remainingTime) {
         const timerElement = document.getElementById('timerValue');
-        if (timerElement) {
-            const seconds = Math.ceil(remainingTime / 1000);
-            timerElement.textContent = `${seconds}s`;
-            
-            // 时间不足30秒时变红色
-            if (seconds <= 30) {
-                timerElement.style.color = '#f87171';
-            } else {
-                timerElement.style.color = '#38bdf8';
-            }
+        if (!timerElement) return;
+        const seconds = Math.max(0, Math.ceil(remainingTime / 1000));
+        const m = Math.floor(seconds / 60);
+        const s = seconds % 60;
+        timerElement.textContent = `${m}:${String(s).padStart(2, '0')}`;
+        // 剩 30 秒变金、10 秒变红脉冲
+        const box = document.getElementById('gameTimer');
+        if (box) {
+            box.classList.toggle('critical', seconds <= 10);
+            box.classList.toggle('low', seconds > 10 && seconds <= 30);
         }
     }
 
@@ -2470,22 +2477,18 @@ class GameClient {
             const health = Math.max(0, player.health);
             const healthPercent = (health / 100) * 100;
             
-            // 更新血条显示
+            // 更新血量显示（颜色状态由 CSS class 控制）
             document.getElementById('health').textContent = health;
             const healthFill = document.getElementById('healthFill');
             if (healthFill) {
                 healthFill.style.width = healthPercent + '%';
-                
-                // 根据血量改变血条颜色
-                if (healthPercent > 60) {
-                    healthFill.style.background = 'linear-gradient(90deg, #27ae60, #2ecc71, #27ae60)';
-                } else if (healthPercent > 30) {
-                    healthFill.style.background = 'linear-gradient(90deg, #f39c12, #e67e22, #f39c12)';
-                } else {
-                    healthFill.style.background = 'linear-gradient(90deg, #e74c3c, #c0392b, #e74c3c)';
-                }
             }
-            
+            const uiRoot = document.getElementById('ui');
+            if (uiRoot) {
+                uiRoot.classList.toggle('hp-low', healthPercent <= 30);
+                uiRoot.classList.toggle('hp-mid', healthPercent > 30 && healthPercent <= 60);
+            }
+
             // 更新分数显示
             document.getElementById('score').textContent = player.score;
         }
