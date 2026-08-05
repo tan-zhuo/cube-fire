@@ -2821,42 +2821,47 @@ class GameClient {
         ctx.ellipse(cx, baseY + s / 2 + 3, s * 0.55 - bob * 0.06 * s, s * 0.2, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        // 箱体（2.5D 挤出：亮顶面 + 暗侧面）
+        // 箱体精灵：按类别只预渲染一次（渐变+描边+包角+文字），每帧仅 drawImage
         ctx.globalAlpha = 1;
-        const x0 = cx - s / 2, y0 = topY - s / 2;
-        // 侧面
-        ctx.fillStyle = P.side;
-        ctx.fillRect(x0, y0 + s - ex, s, ex);
-        // 顶面
-        const topGrad = ctx.createLinearGradient(x0, y0 - ex, x0, y0 + s - ex);
-        topGrad.addColorStop(0, P.topA);
-        topGrad.addColorStop(1, P.topB);
-        ctx.fillStyle = topGrad;
-        ctx.fillRect(x0, y0 - ex, s, s);
-        // 描边与箱盖缝
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(x0 + 0.5, y0 - ex + 0.5, s - 1, s - 1);
-        ctx.strokeStyle = P.lid;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(x0, y0 - ex + s * 0.32);
-        ctx.lineTo(x0 + s, y0 - ex + s * 0.32);
-        ctx.stroke();
-        // 金属包角
-        ctx.fillStyle = P.corner;
-        const c = 3.5;
-        ctx.fillRect(x0, y0 - ex, c, c);
-        ctx.fillRect(x0 + s - c, y0 - ex, c, c);
-        ctx.fillRect(x0, y0 - ex + s - c, c, c);
-        ctx.fillRect(x0 + s - c, y0 - ex + s - c, c, c);
-
-        // 中央类别标记（武=武器箱 +=增益箱）
-        ctx.fillStyle = P.glyph;
-        ctx.font = `bold ${Math.round(s * (isWeapon ? 0.55 : 0.68))}px system-ui, sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(P.mark, cx, y0 - ex + s * 0.6);
+        if (!this._crateSprites) this._crateSprites = {};
+        const spriteKey = isWeapon ? 'weapon' : 'buff';
+        let crate = this._crateSprites[spriteKey];
+        if (!crate) {
+            crate = document.createElement('canvas');
+            crate.width = s + 4;
+            crate.height = s + ex + 4;
+            const g = crate.getContext('2d');
+            const gx = 2, gy = 2 + ex; // 顶面左上角在精灵内的位置（顶面从 gy-ex 开始）
+            g.fillStyle = P.side;
+            g.fillRect(gx, gy + s - ex, s, ex);
+            const topGrad = g.createLinearGradient(gx, gy - ex, gx, gy + s - ex);
+            topGrad.addColorStop(0, P.topA);
+            topGrad.addColorStop(1, P.topB);
+            g.fillStyle = topGrad;
+            g.fillRect(gx, gy - ex, s, s);
+            g.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+            g.lineWidth = 1.5;
+            g.strokeRect(gx + 0.5, gy - ex + 0.5, s - 1, s - 1);
+            g.strokeStyle = P.lid;
+            g.lineWidth = 1;
+            g.beginPath();
+            g.moveTo(gx, gy - ex + s * 0.32);
+            g.lineTo(gx + s, gy - ex + s * 0.32);
+            g.stroke();
+            g.fillStyle = P.corner;
+            const c = 3.5;
+            g.fillRect(gx, gy - ex, c, c);
+            g.fillRect(gx + s - c, gy - ex, c, c);
+            g.fillRect(gx, gy - ex + s - c, c, c);
+            g.fillRect(gx + s - c, gy - ex + s - c, c, c);
+            g.fillStyle = P.glyph;
+            g.font = `bold ${Math.round(s * (isWeapon ? 0.55 : 0.68))}px system-ui, sans-serif`;
+            g.textAlign = 'center';
+            g.textBaseline = 'middle';
+            g.fillText(P.mark, gx + s / 2, gy - ex + s * 0.6);
+            this._crateSprites[spriteKey] = crate;
+        }
+        ctx.drawImage(crate, cx - s / 2 - 2, topY - s / 2 - ex - 2);
 
         ctx.restore();
     }
@@ -2995,7 +3000,8 @@ class GameClient {
                    bullet.y > 0 && bullet.y < this.canvas.height;
         });
 
-        // 更新特效
+        // 更新特效（上限 36 个，超出丢弃最旧的，防止碎片场景堆积掉帧）
+        if (this.effects.length > 36) this.effects.splice(0, this.effects.length - 36);
         this.effects = this.effects.filter(effect => {
             effect.update();
             return !effect.isDead();
@@ -3672,17 +3678,24 @@ class GameClient {
     }
 
     drawGrid() {
-        // 卡通风：点阵替代线网格，更轻快
-        const ctx = this.backCtx;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.10)';
-        const gridSize = 50;
-        for (let x = gridSize; x < this.canvas.width; x += gridSize) {
-            for (let y = gridSize; y < this.canvas.height; y += gridSize) {
-                ctx.beginPath();
-                ctx.arc(x, y, 1.6, 0, Math.PI * 2);
-                ctx.fill();
+        // 点阵网格静态：预渲染一次，每帧 drawImage
+        if (!this._gridCanvas) {
+            const c = document.createElement('canvas');
+            c.width = this.canvas.width;
+            c.height = this.canvas.height;
+            const g = c.getContext('2d');
+            g.fillStyle = 'rgba(255, 255, 255, 0.10)';
+            const gridSize = 50;
+            for (let x = gridSize; x < c.width; x += gridSize) {
+                for (let y = gridSize; y < c.height; y += gridSize) {
+                    g.beginPath();
+                    g.arc(x, y, 1.6, 0, Math.PI * 2);
+                    g.fill();
+                }
             }
+            this._gridCanvas = c;
         }
+        this.backCtx.drawImage(this._gridCanvas, 0, 0);
     }
 
     // 机甲本体（旋转坐标系内绘制，+x 为朝向；s 为机甲边长约 40）
@@ -3974,9 +3987,16 @@ class GameClient {
 
         // 玩家身体（卡通风：圆角方块 + 粗描边 + 顶部高光）
         const bodyColor = player.isAlive ? (player.color || '#3498db') : '#8a93a5';
-        const bodyGrad = this.backCtx.createLinearGradient(0, -size / 2, 0, size / 2);
-        bodyGrad.addColorStop(0, this._shade(bodyColor, 30));
-        bodyGrad.addColorStop(1, this._shade(bodyColor, -18));
+        // 渐变坐标在旋转后的本地坐标系中固定，可按 颜色+尺寸 缓存渐变对象
+        if (!this._bodyGrads) this._bodyGrads = new Map();
+        const gradKey = `${bodyColor}_${size}`;
+        let bodyGrad = this._bodyGrads.get(gradKey);
+        if (!bodyGrad) {
+            bodyGrad = this.backCtx.createLinearGradient(0, -size / 2, 0, size / 2);
+            bodyGrad.addColorStop(0, this._shade(bodyColor, 30));
+            bodyGrad.addColorStop(1, this._shade(bodyColor, -18));
+            this._bodyGrads.set(gradKey, bodyGrad);
+        }
         this.backCtx.fillStyle = bodyGrad;
         this.backCtx.beginPath();
         this.backCtx.roundRect(-size / 2, -size / 2, size, size, 5);
@@ -4042,16 +4062,18 @@ class GameClient {
                 this.backCtx.fill();
                 this.backCtx.stroke();
                 if (zombieEyes) {
+                    // 红晕层 + 实心红瞳（替代 shadowBlur）
+                    this.backCtx.fillStyle = 'rgba(255, 70, 70, 0.35)';
+                    this.backCtx.beginPath();
+                    this.backCtx.arc(eyeX + eyeR * 0.42, sy * eyeY, eyeR * 0.85, 0, Math.PI * 2);
+                    this.backCtx.fill();
                     this.backCtx.fillStyle = '#e03131';
-                    this.backCtx.shadowColor = '#ff5d5d';
-                    this.backCtx.shadowBlur = 5;
                 } else {
                     this.backCtx.fillStyle = '#232842';
                 }
                 this.backCtx.beginPath();
                 this.backCtx.arc(eyeX + eyeR * 0.42, sy * eyeY, eyeR * 0.5, 0, Math.PI * 2);
                 this.backCtx.fill();
-                this.backCtx.shadowBlur = 0;
             }
         } else {
             // 阵亡：×× 眼
@@ -4106,15 +4128,14 @@ class GameClient {
             }
         }
 
-        // 增益武器光效：伤害强化=赤红灼光 / 急速射击=炽热橙光
+        // 增益武器光效：伤害强化=赤红 / 急速射击=炽热橙（柔光圆替代 shadowBlur，后者每帧开销极高）
         const dmgGlow = player.powerups && player.powerups.damageBoost && player.powerups.damageBoost.active;
         const rapidGlow = player.powerups && player.powerups.rapidFire && player.powerups.rapidFire.active;
-        if (dmgGlow) {
-            this.backCtx.shadowColor = '#ff4d4d';
-            this.backCtx.shadowBlur = 10;
-        } else if (rapidGlow) {
-            this.backCtx.shadowColor = '#ffb347';
-            this.backCtx.shadowBlur = 10;
+        if (dmgGlow || rapidGlow) {
+            this.backCtx.fillStyle = dmgGlow ? 'rgba(255, 77, 77, 0.30)' : 'rgba(255, 179, 71, 0.30)';
+            this.backCtx.beginPath();
+            this.backCtx.arc(size / 2 + 4, 0, 8, 0, Math.PI * 2);
+            this.backCtx.fill();
         }
 
         // 枪械外观（随武器变化；感染者无枪）
@@ -4283,9 +4304,11 @@ class GameClient {
             ctx.fillRect(bullet.x - 1.5, bullet.y - 6.5, 3, 3);
             // 引信灯（越接近爆炸闪得越快）
             if (Math.sin(time * 0.03) > -0.2) {
+                ctx.fillStyle = 'rgba(255, 93, 93, 0.4)';
+                ctx.beginPath();
+                ctx.arc(bullet.x, bullet.y - 5, 3, 0, Math.PI * 2);
+                ctx.fill();
                 ctx.fillStyle = '#ff5d5d';
-                ctx.shadowColor = '#ff5d5d';
-                ctx.shadowBlur = 6;
                 ctx.beginPath();
                 ctx.arc(bullet.x, bullet.y - 5, 1.4, 0, Math.PI * 2);
                 ctx.fill();
@@ -4294,38 +4317,41 @@ class GameClient {
             return;
         }
 
+        // 曳光弹精灵：渐变只在首次生成，之后按弹道方向旋转贴图
+        if (!this._bulletSprite) {
+            const len = 30, pad = 8;
+            const c = document.createElement('canvas');
+            c.width = len + pad * 2;
+            c.height = 16;
+            const g = c.getContext('2d');
+            const cy = 8, hx = len + pad;
+            const tracer = g.createLinearGradient(pad, cy, hx, cy);
+            tracer.addColorStop(0, 'rgba(255, 150, 40, 0)');
+            tracer.addColorStop(0.6, 'rgba(255, 190, 80, 0.55)');
+            tracer.addColorStop(1, 'rgba(255, 235, 170, 0.95)');
+            g.strokeStyle = tracer;
+            g.lineWidth = size * 0.9;
+            g.lineCap = 'round';
+            g.beginPath();
+            g.moveTo(pad, cy);
+            g.lineTo(hx - 2, cy);
+            g.stroke();
+            const core = g.createRadialGradient(hx - 2, cy, 0, hx - 2, cy, size * 0.9);
+            core.addColorStop(0, '#ffffff');
+            core.addColorStop(0.5, '#ffe9a0');
+            core.addColorStop(1, 'rgba(255, 170, 0, 0)');
+            g.fillStyle = core;
+            g.beginPath();
+            g.arc(hx - 2, cy, size * 0.9, 0, Math.PI * 2);
+            g.fill();
+            this._bulletSprite = c;
+        }
         this.backCtx.save();
-
-        // 曳光弹：沿速度方向的发光渐变光条 + 亮芯
         this.backCtx.globalCompositeOperation = 'lighter';
-        const tailX = bullet.x - bullet.vx * 2.6;
-        const tailY = bullet.y - bullet.vy * 2.6;
-        const tracer = this.backCtx.createLinearGradient(tailX, tailY, bullet.x, bullet.y);
-        tracer.addColorStop(0, 'rgba(255, 150, 40, 0)');
-        tracer.addColorStop(0.6, 'rgba(255, 190, 80, 0.55)');
-        tracer.addColorStop(1, 'rgba(255, 235, 170, 0.95)');
-        this.backCtx.strokeStyle = tracer;
-        this.backCtx.lineWidth = size * 0.9;
-        this.backCtx.lineCap = 'round';
-        this.backCtx.beginPath();
-        this.backCtx.moveTo(tailX, tailY);
-        this.backCtx.lineTo(bullet.x, bullet.y);
-        this.backCtx.stroke();
-
-        // 亮芯
-        const gradient = this.backCtx.createRadialGradient(
-            bullet.x, bullet.y, 0,
-            bullet.x, bullet.y, size * 0.9
-        );
-        gradient.addColorStop(0, '#ffffff');
-        gradient.addColorStop(0.5, '#ffe9a0');
-        gradient.addColorStop(1, 'rgba(255, 170, 0, 0)');
-        this.backCtx.fillStyle = gradient;
-        this.backCtx.beginPath();
-        this.backCtx.arc(bullet.x, bullet.y, size * 0.9, 0, Math.PI * 2);
-        this.backCtx.fill();
+        this.backCtx.translate(bullet.x, bullet.y);
+        this.backCtx.rotate(Math.atan2(bullet.vy, bullet.vx));
+        this.backCtx.drawImage(this._bulletSprite, -(this._bulletSprite.width - 10), -8);
         this.backCtx.globalCompositeOperation = 'source-over';
-        this.backCtx.globalAlpha = 1;
 
         // 添加闪烁效果
         this.backCtx.shadowBlur = 0;
@@ -4347,17 +4373,29 @@ class GameClient {
         const centerY = player.y + size / 2;
         const time = Date.now();
 
-        // 护盾：淡蓝护罩微光（铠甲主体画在角色旋转坐标系里）
+        // 护盾：淡蓝护罩微光（渐变精灵化，脉动用 globalAlpha 实现）
         if (player.powerups.shield && player.powerups.shield.active) {
+            if (!this._glowSprites) this._glowSprites = {};
+            const key = `shield_${size}`;
+            let spr = this._glowSprites[key];
+            if (!spr) {
+                const r = size * 0.95;
+                spr = document.createElement('canvas');
+                spr.width = spr.height = Math.ceil(r * 2) + 2;
+                const g2 = spr.getContext('2d');
+                const cc = spr.width / 2;
+                const g = g2.createRadialGradient(cc, cc, size * 0.4, cc, cc, r);
+                g.addColorStop(0, 'rgba(140, 190, 255, 0)');
+                g.addColorStop(1, 'rgba(140, 190, 255, 1)');
+                g2.fillStyle = g;
+                g2.beginPath();
+                g2.arc(cc, cc, r, 0, Math.PI * 2);
+                g2.fill();
+                this._glowSprites[key] = spr;
+            }
             ctx.save();
-            const pulse = 0.25 + 0.12 * Math.sin(time * 0.006);
-            const g = ctx.createRadialGradient(centerX, centerY, size * 0.4, centerX, centerY, size * 0.95);
-            g.addColorStop(0, 'rgba(140, 190, 255, 0)');
-            g.addColorStop(1, `rgba(140, 190, 255, ${pulse})`);
-            ctx.fillStyle = g;
-            ctx.beginPath();
-            ctx.arc(centerX, centerY, size * 0.95, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.globalAlpha = 0.25 + 0.12 * Math.sin(time * 0.006);
+            ctx.drawImage(spr, centerX - spr.width / 2, centerY - spr.height / 2);
             ctx.restore();
         }
 
@@ -4414,14 +4452,26 @@ class GameClient {
             ctx.save();
             const p = 1 - (player.healFxUntil - time) / 1400;
             ctx.globalAlpha = Math.min(1, (1 - p) * 1.6);
-            // 身体绿光
-            const hg = ctx.createRadialGradient(centerX, centerY, size * 0.3, centerX, centerY, size * 0.9);
-            hg.addColorStop(0, 'rgba(80, 230, 140, 0.25)');
-            hg.addColorStop(1, 'rgba(80, 230, 140, 0)');
-            ctx.fillStyle = hg;
-            ctx.beginPath();
-            ctx.arc(centerX, centerY, size * 0.9, 0, Math.PI * 2);
-            ctx.fill();
+            // 身体绿光（渐变精灵化）
+            if (!this._glowSprites) this._glowSprites = {};
+            const hkey = `heal_${size}`;
+            let hspr = this._glowSprites[hkey];
+            if (!hspr) {
+                const r = size * 0.9;
+                hspr = document.createElement('canvas');
+                hspr.width = hspr.height = Math.ceil(r * 2) + 2;
+                const g2 = hspr.getContext('2d');
+                const cc = hspr.width / 2;
+                const hg = g2.createRadialGradient(cc, cc, size * 0.3, cc, cc, r);
+                hg.addColorStop(0, 'rgba(80, 230, 140, 0.25)');
+                hg.addColorStop(1, 'rgba(80, 230, 140, 0)');
+                g2.fillStyle = hg;
+                g2.beginPath();
+                g2.arc(cc, cc, r, 0, Math.PI * 2);
+                g2.fill();
+                this._glowSprites[hkey] = hspr;
+            }
+            ctx.drawImage(hspr, centerX - hspr.width / 2, centerY - hspr.height / 2);
             // 三枚上升绿十字（不同相位）
             ctx.fillStyle = '#5dde9a';
             for (let i = 0; i < 3; i++) {
@@ -4576,18 +4626,26 @@ class GameClient {
         this.backCtx.scale(breathScale, breathScale);
         this.backCtx.translate(-centerX, -centerY);
 
-        // 绘制角色光晕
-        const glowGradient = this.backCtx.createRadialGradient(
-            centerX, centerY, size * 0.3,
-            centerX, centerY, size * 0.8
-        );
-        glowGradient.addColorStop(0, player.color + '30');
-        glowGradient.addColorStop(1, player.color + '00');
-
-        this.backCtx.fillStyle = glowGradient;
-        this.backCtx.beginPath();
-        this.backCtx.arc(centerX, centerY, size * 0.8, 0, Math.PI * 2);
-        this.backCtx.fill();
+        // 绘制角色光晕（按 颜色+尺寸 精灵化，避免每玩家每帧建渐变）
+        if (!this._glowSprites) this._glowSprites = {};
+        const auraKey = `aura_${player.color}_${size}`;
+        let aura = this._glowSprites[auraKey];
+        if (!aura) {
+            const r = size * 0.8;
+            aura = document.createElement('canvas');
+            aura.width = aura.height = Math.ceil(r * 2) + 2;
+            const g = aura.getContext('2d');
+            const cc = aura.width / 2;
+            const glowGradient = g.createRadialGradient(cc, cc, size * 0.3, cc, cc, r);
+            glowGradient.addColorStop(0, player.color + '30');
+            glowGradient.addColorStop(1, player.color + '00');
+            g.fillStyle = glowGradient;
+            g.beginPath();
+            g.arc(cc, cc, r, 0, Math.PI * 2);
+            g.fill();
+            this._glowSprites[auraKey] = aura;
+        }
+        this.backCtx.drawImage(aura, centerX - aura.width / 2, centerY - aura.height / 2);
 
         this.backCtx.restore();
 
