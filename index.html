@@ -25,8 +25,8 @@
             --gold: #fbbf24;
             --danger: #f87171;
             --success: #34d399;
-            --radius: 14px;
-            --radius-sm: 10px;
+            --radius: 18px;
+            --radius-sm: 14px;
             --shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
             --font: system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
             --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
@@ -91,8 +91,8 @@
             width: min(1200px, calc(100vw - var(--sidebar-w) - 24px), calc((100vh - 150px) * 1.5));
             height: auto;
             cursor: crosshair;
-            background: #0e1626;
-            border: 1px solid var(--border-strong);
+            background: #333d78;
+            border: 2px solid rgba(148, 163, 184, 0.35);
             border-radius: 12px;
             box-shadow:
                 0 0 0 1px rgba(56, 189, 248, 0.08),
@@ -105,7 +105,7 @@
             background: var(--surface);
             backdrop-filter: blur(14px);
             -webkit-backdrop-filter: blur(14px);
-            border: 1px solid var(--border);
+            border: 2px solid var(--border-strong);
             border-radius: var(--radius);
             box-shadow: var(--shadow);
         }
@@ -236,10 +236,10 @@
 
         .topbar-tag {
             font-size: 12px;
-            font-weight: 600;
+            font-weight: 700;
             color: var(--accent);
             background: rgba(56, 189, 248, 0.10);
-            border: 1px solid rgba(56, 189, 248, 0.30);
+            border: 2px solid rgba(56, 189, 248, 0.35);
             padding: 6px 14px;
             border-radius: 999px;
             letter-spacing: 0.5px;
@@ -312,8 +312,8 @@
             background: var(--surface);
             backdrop-filter: blur(18px);
             -webkit-backdrop-filter: blur(18px);
-            border: 1px solid var(--border-strong);
-            border-radius: 20px;
+            border: 2px solid var(--border-strong);
+            border-radius: 22px;
             padding: 20px 26px 16px;
             box-shadow: var(--shadow), 0 0 0 1px rgba(56, 189, 248, 0.06);
         }
@@ -368,20 +368,27 @@
             gap: 14px;
             width: 100%;
             text-align: left;
-            padding: 11px 14px;
-            margin-bottom: 8px;
+            padding: 12px 16px;
+            margin-bottom: 10px;
             color: var(--text-hi);
             background: rgba(148, 163, 184, 0.05);
-            border: 1px solid var(--border);
+            border: 2px solid var(--border-strong);
             border-radius: var(--radius);
             cursor: pointer;
-            transition: transform 0.15s, border-color 0.2s, background 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 0 rgba(10, 16, 30, 0.75);
+            transition: transform 0.1s, border-color 0.2s, background 0.2s, box-shadow 0.1s;
         }
 
         .mode-card:hover {
             transform: translateY(-2px);
-            border-color: var(--border-strong);
+            border-color: var(--accent);
             background: rgba(148, 163, 184, 0.09);
+            box-shadow: 0 6px 0 rgba(10, 16, 30, 0.75);
+        }
+
+        .mode-card:active {
+            transform: translateY(2px);
+            box-shadow: 0 1px 0 rgba(10, 16, 30, 0.75);
         }
 
         .mode-card.primary {
@@ -487,32 +494,44 @@
             padding: 11px 18px;
             margin-top: 10px;
             font-size: 14px;
-            font-weight: 700;
+            font-weight: 800;
             letter-spacing: 1px;
             color: #06202e;
-            background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+            background: linear-gradient(180deg, #7dd3fc, var(--accent-deep));
             border: none;
             border-radius: var(--radius-sm);
             cursor: pointer;
-            transition: transform 0.15s, box-shadow 0.2s, filter 0.2s;
+            box-shadow: 0 4px 0 #0b6a9b;
+            transition: transform 0.1s, box-shadow 0.1s, filter 0.2s;
         }
 
         .btn:hover {
             transform: translateY(-1px);
-            box-shadow: 0 6px 22px rgba(56, 189, 248, 0.35);
+            box-shadow: 0 5px 0 #0b6a9b, 0 8px 20px rgba(56, 189, 248, 0.3);
             filter: brightness(1.06);
+        }
+
+        .btn:active {
+            transform: translateY(3px);
+            box-shadow: 0 1px 0 #0b6a9b;
         }
 
         .btn.ghost {
             color: var(--text-mid);
             background: rgba(148, 163, 184, 0.08);
-            border: 1px solid var(--border);
+            border: 2px solid var(--border-strong);
+            box-shadow: 0 3px 0 rgba(10, 16, 30, 0.8);
         }
 
         .btn.ghost:hover {
             color: var(--text-hi);
-            box-shadow: none;
             border-color: var(--border-strong);
+            box-shadow: 0 4px 0 rgba(10, 16, 30, 0.8);
+        }
+
+        .btn.ghost:active {
+            transform: translateY(2px);
+            box-shadow: 0 1px 0 rgba(10, 16, 30, 0.8);
         }
 
         .panel-status {
@@ -554,13 +573,13 @@
             height: 26px;
             padding: 0 7px;
             font-size: 11px;
-            font-weight: 700;
+            font-weight: 800;
             font-family: var(--mono);
             color: var(--text-hi);
-            background: linear-gradient(180deg, rgba(148, 163, 184, 0.16), rgba(148, 163, 184, 0.06));
-            border: 1px solid var(--border-strong);
-            border-bottom-width: 2px;
-            border-radius: 6px;
+            background: linear-gradient(180deg, rgba(148, 163, 184, 0.20), rgba(148, 163, 184, 0.07));
+            border: 2px solid var(--border-strong);
+            border-bottom-width: 4px;
+            border-radius: 8px;
         }
 
         .landing-footer {
@@ -607,9 +626,10 @@
             font-weight: 800;
             font-family: var(--mono);
             font-variant-numeric: tabular-nums;
-            color: #eef4fb;
+            color: #ffffff;
             line-height: 1.05;
-            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
+            -webkit-text-stroke: 1px rgba(20, 26, 48, 0.9);
+            text-shadow: 0 3px 0 rgba(20, 26, 48, 0.5), 0 4px 10px rgba(0, 0, 0, 0.5);
             transition: color 0.3s;
         }
 
@@ -915,8 +935,9 @@
             font-family: var(--mono);
             font-variant-numeric: tabular-nums;
             line-height: 1;
-            color: #eef4fb;
-            text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
+            color: #ffffff;
+            -webkit-text-stroke: 1.2px rgba(20, 26, 48, 0.9);
+            text-shadow: 0 3px 0 rgba(20, 26, 48, 0.55), 0 4px 10px rgba(0, 0, 0, 0.5);
             transition: color 0.25s;
         }
 
@@ -1076,8 +1097,8 @@
             padding: 20px 22px;
             background: var(--surface-hi);
             backdrop-filter: blur(18px);
-            border: 1px solid var(--border-strong);
-            border-radius: 16px;
+            border: 2px solid var(--border-strong);
+            border-radius: 18px;
             box-shadow: var(--shadow);
             text-align: center;
         }
@@ -1209,8 +1230,8 @@
             padding: 38px 44px 34px;
             text-align: center;
             background: var(--surface-hi);
-            border: 1px solid var(--border-strong);
-            border-radius: 22px;
+            border: 2px solid var(--border-strong);
+            border-radius: 24px;
             box-shadow: var(--shadow), 0 0 80px rgba(56, 189, 248, 0.12);
         }
 
@@ -1621,12 +1642,13 @@
             max-width: min(440px, 90vw);
             padding: 10px 18px;
             font-size: 13.5px;
-            font-weight: 600;
+            font-weight: 700;
             color: var(--text-hi);
             background: var(--surface-hi);
             backdrop-filter: blur(14px);
             -webkit-backdrop-filter: blur(14px);
-            border: 1px solid var(--border-strong);
+            border: 2px solid var(--border-strong);
+            box-shadow: 0 4px 0 rgba(10, 16, 30, 0.6);
             border-radius: 999px;
             box-shadow: var(--shadow);
             cursor: pointer;

@@ -1,4 +1,18 @@
 // 二进制协议类型常量（客户端/服务端一致）
+// roundRect 兜底（Chrome 99+ 原生支持；旧内核用 arcTo 实现）
+if (typeof CanvasRenderingContext2D !== 'undefined' && !CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+        const rr = Math.min(Array.isArray(r) ? r[0] : (r || 0), w / 2, h / 2);
+        this.moveTo(x + rr, y);
+        this.arcTo(x + w, y, x + w, y + h, rr);
+        this.arcTo(x + w, y + h, x, y + h, rr);
+        this.arcTo(x, y + h, x, y, rr);
+        this.arcTo(x, y, x + w, y, rr);
+        this.closePath();
+        return this;
+    };
+}
+
 const MESSAGE_TYPES = {
     // 客户端发送
     JOIN: 1,
@@ -2727,35 +2741,51 @@ class GameClient {
     // 2.5D 地形块：顶面上移 + 侧立面，营造高度感
     drawTerrainBlock(block) {
         const ctx = this.backCtx;
-        const H = 12; // 挤出高度
-        let top, side, edge;
+        const H = 12;  // 挤出高度
+        const R = 6;   // 卡通圆角
+        let top, side, line;
         switch (block.type) {
-            case 'rock':   top = '#55647a'; side = '#333d4d'; edge = '#6b7c94'; break;
-            case 'crate':  top = '#996428'; side = '#5c3a15'; edge = '#b8813c'; break;
-            case 'barrel': top = '#2a3a58'; side = '#182338'; edge = '#3a5078'; break;
-            default:       top = '#26365a'; side = '#151f38'; edge = '#3b5382'; // wall
+            case 'rock':   top = '#9aa7c2'; side = '#66738f'; line = '#3a4258'; break;
+            case 'crate':  top = '#e0a04c'; side = '#a06a28'; line = '#5c3d14'; break;
+            case 'barrel': top = '#5e79d8'; side = '#3d4f9e'; line = '#28316b'; break;
+            default:       top = '#6b7fdd'; side = '#4552a8'; line = '#2b3472'; // wall
         }
-        // 侧立面（下缘可见带）
+        // 侧立面（圆角贴住顶面）
         ctx.fillStyle = side;
-        ctx.fillRect(block.x, block.y + block.height - H, block.width, H);
-        // 顶面（整体上移 H）
+        ctx.beginPath();
+        ctx.roundRect(block.x, block.y - H + block.height - R, block.width, H + R, R);
+        ctx.fill();
+        // 顶面
         ctx.fillStyle = top;
-        ctx.fillRect(block.x, block.y - H, block.width, block.height);
-        ctx.strokeStyle = edge;
-        ctx.lineWidth = 1;
-        ctx.strokeRect(block.x + 0.5, block.y - H + 0.5, block.width - 1, block.height - 1);
+        ctx.beginPath();
+        ctx.roundRect(block.x, block.y - H, block.width, block.height, R);
+        ctx.fill();
+        // 卡通粗描边（整体轮廓）
+        ctx.strokeStyle = line;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.roundRect(block.x + 1, block.y - H + 1, block.width - 2, block.height + H - 2, R);
+        ctx.stroke();
+        // 顶面高光
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.30)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(block.x + R, block.y - H + 2.5);
+        ctx.lineTo(block.x + block.width - R, block.y - H + 2.5);
+        ctx.stroke();
         // 类型细节（画在顶面坐标系）
         if (block.type === 'crate') {
-            ctx.strokeStyle = edge;
+            ctx.strokeStyle = line;
+            ctx.lineWidth = 2;
             ctx.beginPath();
-            ctx.moveTo(block.x + block.width / 2, block.y - H);
-            ctx.lineTo(block.x + block.width / 2, block.y - H + block.height);
-            ctx.moveTo(block.x, block.y - H + block.height / 2);
-            ctx.lineTo(block.x + block.width, block.y - H + block.height / 2);
+            ctx.moveTo(block.x + block.width / 2, block.y - H + 4);
+            ctx.lineTo(block.x + block.width / 2, block.y - H + block.height - 4);
+            ctx.moveTo(block.x + 4, block.y - H + block.height / 2);
+            ctx.lineTo(block.x + block.width - 4, block.y - H + block.height / 2);
             ctx.stroke();
         } else if (block.type === 'barrel') {
-            ctx.strokeStyle = '#64748b';
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = line;
+            ctx.lineWidth = 2.5;
             ctx.beginPath();
             ctx.arc(block.x + block.width / 2, block.y - H + block.height / 2, block.width / 3, 0, Math.PI * 2);
             ctx.stroke();
@@ -2773,7 +2803,7 @@ class GameClient {
             const r = Math.max(c.width, c.height) * 0.72;
             const g = vctx.createRadialGradient(cx, cy, r * 0.55, cx, cy, r);
             g.addColorStop(0, 'rgba(0, 0, 0, 0)');
-            g.addColorStop(1, 'rgba(0, 0, 0, 0.34)');
+            g.addColorStop(1, 'rgba(10, 14, 40, 0.22)');
             vctx.fillStyle = g;
             vctx.fillRect(0, 0, c.width, c.height);
             this._vignette = c;
@@ -2786,8 +2816,8 @@ class GameClient {
     }
 
     render() {
-        // 清空后台缓冲区
-        this.backCtx.fillStyle = '#0e1626';
+        // 清空后台缓冲区（卡通风：明快的靛蓝场地）
+        this.backCtx.fillStyle = '#333d78';
         this.backCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
         
         // 屏幕震动偏移
@@ -2863,22 +2893,16 @@ class GameClient {
     }
 
     drawGrid() {
-        this.backCtx.strokeStyle = 'rgba(148, 163, 184, 0.07)';
-        this.backCtx.lineWidth = 1;
-        
+        // 卡通风：点阵替代线网格，更轻快
+        const ctx = this.backCtx;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.10)';
         const gridSize = 50;
-        for (let x = 0; x < this.canvas.width; x += gridSize) {
-            this.backCtx.beginPath();
-            this.backCtx.moveTo(x, 0);
-            this.backCtx.lineTo(x, this.canvas.height);
-            this.backCtx.stroke();
-        }
-        
-        for (let y = 0; y < this.canvas.height; y += gridSize) {
-            this.backCtx.beginPath();
-            this.backCtx.moveTo(0, y);
-            this.backCtx.lineTo(this.canvas.width, y);
-            this.backCtx.stroke();
+        for (let x = gridSize; x < this.canvas.width; x += gridSize) {
+            for (let y = gridSize; y < this.canvas.height; y += gridSize) {
+                ctx.beginPath();
+                ctx.arc(x, y, 1.6, 0, Math.PI * 2);
+                ctx.fill();
+            }
         }
     }
 
@@ -2902,16 +2926,54 @@ class GameClient {
         this.backCtx.translate(player.x + size / 2, player.y + size / 2);
         this.backCtx.rotate(player.angle);
         
-        // 玩家身体（受光面/暗面渐变 + 描边，立体感）
-        const bodyColor = player.isAlive ? (player.color || '#3498db') : '#5b6678';
+        // 玩家身体（卡通风：圆角方块 + 粗描边 + 顶部高光）
+        const bodyColor = player.isAlive ? (player.color || '#3498db') : '#8a93a5';
         const bodyGrad = this.backCtx.createLinearGradient(0, -size / 2, 0, size / 2);
-        bodyGrad.addColorStop(0, this._shade(bodyColor, 42));
-        bodyGrad.addColorStop(1, this._shade(bodyColor, -34));
+        bodyGrad.addColorStop(0, this._shade(bodyColor, 30));
+        bodyGrad.addColorStop(1, this._shade(bodyColor, -18));
         this.backCtx.fillStyle = bodyGrad;
-        this.backCtx.fillRect(-size / 2, -size / 2, size, size);
-        this.backCtx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
-        this.backCtx.lineWidth = 1.5;
-        this.backCtx.strokeRect(-size / 2, -size / 2, size, size);
+        this.backCtx.beginPath();
+        this.backCtx.roundRect(-size / 2, -size / 2, size, size, 5);
+        this.backCtx.fill();
+        this.backCtx.strokeStyle = '#232842';
+        this.backCtx.lineWidth = 2.5;
+        this.backCtx.stroke();
+        // 顶部高光点
+        this.backCtx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+        this.backCtx.beginPath();
+        this.backCtx.arc(-size * 0.22, -size * 0.22, size * 0.13, 0, Math.PI * 2);
+        this.backCtx.fill();
+
+        // 卡通眼睛（旋转坐标系里 +x 即朝向）
+        if (player.isAlive) {
+            const eyeX = size * 0.14, eyeY = size * 0.2, eyeR = size * 0.17;
+            for (const sy of [-1, 1]) {
+                this.backCtx.fillStyle = '#ffffff';
+                this.backCtx.strokeStyle = '#232842';
+                this.backCtx.lineWidth = 1.2;
+                this.backCtx.beginPath();
+                this.backCtx.arc(eyeX, sy * eyeY, eyeR, 0, Math.PI * 2);
+                this.backCtx.fill();
+                this.backCtx.stroke();
+                this.backCtx.fillStyle = '#232842';
+                this.backCtx.beginPath();
+                this.backCtx.arc(eyeX + eyeR * 0.42, sy * eyeY, eyeR * 0.5, 0, Math.PI * 2);
+                this.backCtx.fill();
+            }
+        } else {
+            // 阵亡：×× 眼
+            this.backCtx.strokeStyle = '#3a4152';
+            this.backCtx.lineWidth = 1.8;
+            const eyeX = size * 0.14, eyeY = size * 0.2, k = size * 0.1;
+            for (const sy of [-1, 1]) {
+                this.backCtx.beginPath();
+                this.backCtx.moveTo(eyeX - k, sy * eyeY - k);
+                this.backCtx.lineTo(eyeX + k, sy * eyeY + k);
+                this.backCtx.moveTo(eyeX + k, sy * eyeY - k);
+                this.backCtx.lineTo(eyeX - k, sy * eyeY + k);
+                this.backCtx.stroke();
+            }
+        }
         
         // 枪械外观（随武器变化）
         const wIdx = player.weapon || 0;
