@@ -155,108 +155,125 @@ class Particle {
     }
 }
 
-// 刀挥动效果类
+// 刀挥动效果类：有轮廓的刀 + 跟随刀身的弧形挥砍拖尾
 class KnifeSwingEffect {
-    constructor(x, y, targetX, targetY, duration = 500) {
+    constructor(x, y, targetX, targetY, duration = 340) {
         this.x = x;
         this.y = y;
-        this.targetX = targetX;
-        this.targetY = targetY;
         this.duration = duration;
         this.startTime = Date.now();
-        this.angle = Math.atan2(targetY - y, targetX - x);
-        this.swingAngle = 0;
-        this.maxSwingAngle = Math.PI / 2; // 90度挥动范围
-        this.knifeLength = 50; // 刀的长度与攻击范围匹配
+        this.angle = Math.atan2(targetY - y, targetX - x); // 挥动中心朝向
+        this.arcHalf = Math.PI * 0.42; // 单侧挥幅约 75°
+        this.knifeLength = 50;         // 与攻击判定范围匹配
+        this.progress = 0;
     }
 
     update() {
         const elapsed = Date.now() - this.startTime;
-        const progress = Math.min(elapsed / this.duration, 1);
-        
-        // 挥动动画：从-45度到+45度，使用缓动函数
-        const easeProgress = 1 - Math.pow(1 - progress, 3); // 缓出效果
-        this.swingAngle = (easeProgress - 0.5) * this.maxSwingAngle * 2;
-        
-        return progress >= 1;
+        this.progress = Math.min(elapsed / this.duration, 1);
+        return this.progress >= 1;
     }
 
     draw(ctx) {
-        const elapsed = Date.now() - this.startTime;
-        const progress = Math.min(elapsed / this.duration, 1);
-        const alpha = 1 - progress * 0.7; // 保持一些透明度
-        
+        const p = this.progress;
+        const fade = p < 0.7 ? 1 : Math.max(0, 1 - (p - 0.7) / 0.3);
+        // 快进慢出：起手迅猛、收势自然
+        const eased = 1 - Math.pow(1 - p, 2.6);
+        const startA = -this.arcHalf;
+        const curA = startA + eased * this.arcHalf * 2;
+        const r = this.knifeLength;
+
         ctx.save();
-        ctx.globalAlpha = alpha;
         ctx.translate(this.x, this.y);
-        ctx.rotate(this.angle + this.swingAngle);
-        
-        // 绘制刀身阴影
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
-        ctx.lineWidth = 5;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(2, 2);
-        ctx.lineTo(this.knifeLength + 2, 2);
-        ctx.stroke();
-        
-        // 绘制刀身
-        ctx.strokeStyle = '#c0c0c0';
-        ctx.lineWidth = 4;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(this.knifeLength, 0);
-        ctx.stroke();
-        
-        // 绘制刀刃（更明显的刀刃效果）
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 3;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(8, -3);
-        ctx.lineTo(this.knifeLength - 5, -3);
-        ctx.moveTo(8, 3);
-        ctx.lineTo(this.knifeLength - 5, 3);
-        ctx.stroke();
-        
-        // 绘制刀柄
-        ctx.strokeStyle = '#8b4513';
-        ctx.lineWidth = 6;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(-8, 0);
-        ctx.lineTo(0, 0);
-        ctx.stroke();
-        
-        // 绘制刀柄装饰
-        ctx.strokeStyle = '#654321';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(-6, -2);
-        ctx.lineTo(-2, -2);
-        ctx.moveTo(-6, 2);
-        ctx.lineTo(-2, 2);
-        ctx.stroke();
-        
-        // 绘制挥动轨迹（与实际攻击范围匹配）
-        ctx.strokeStyle = '#ff4444';
-        ctx.lineWidth = 3;
-        ctx.globalAlpha = alpha * 0.6;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.arc(0, 0, this.knifeLength, -this.maxSwingAngle, this.maxSwingAngle);
-        ctx.stroke();
-        
-        // 绘制挥动轨迹的发光效果
-        ctx.strokeStyle = '#ff8888';
-        ctx.lineWidth = 1;
-        ctx.globalAlpha = alpha * 0.3;
-        ctx.beginPath();
-        ctx.arc(0, 0, this.knifeLength + 5, -this.maxSwingAngle, this.maxSwingAngle);
-        ctx.stroke();
-        
+        ctx.rotate(this.angle);
+
+        // ---- 挥砍拖尾：从起始角扫到刀当前角度的弧形渐变（外缘最亮） ----
+        const trailFrom = Math.max(startA, curA - 1.6);
+        if (curA - trailFrom > 0.02) {
+            const grad = ctx.createRadialGradient(0, 0, r * 0.25, 0, 0, r);
+            grad.addColorStop(0, 'rgba(200, 236, 255, 0)');
+            grad.addColorStop(0.72, 'rgba(200, 236, 255, 0.10)');
+            grad.addColorStop(1, 'rgba(228, 246, 255, 0.42)');
+            ctx.globalAlpha = fade;
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.arc(0, 0, r, trailFrom, curA);
+            ctx.closePath();
+            ctx.fill();
+            // 拖尾外缘亮弧
+            ctx.globalAlpha = fade * 0.8;
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.arc(0, 0, r - 1, trailFrom, curA);
+            ctx.stroke();
+        }
+
+        // ---- 刀本体（旋转到当前挥动角度） ----
+        ctx.rotate(curA);
+        ctx.globalAlpha = fade;
+
+        // 投影
+        ctx.save();
+        ctx.translate(2, 3);
+        ctx.globalAlpha = fade * 0.25;
+        ctx.fillStyle = '#000';
+        this._bladePath(ctx);
+        ctx.fill();
         ctx.restore();
+
+        // 刀柄（深色 + 缠绕纹理）与柄尾
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = '#3d2f22';
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.moveTo(-14, 0);
+        ctx.lineTo(-4, 0);
+        ctx.stroke();
+        ctx.strokeStyle = '#5c4632';
+        ctx.lineWidth = 1.5;
+        for (let i = -12; i <= -6; i += 3) {
+            ctx.beginPath();
+            ctx.moveTo(i, -2.6);
+            ctx.lineTo(i + 2, 2.6);
+            ctx.stroke();
+        }
+        ctx.fillStyle = '#8a94a6';
+        ctx.beginPath();
+        ctx.arc(-15, 0, 2.6, 0, Math.PI * 2);
+        ctx.fill();
+        // 护手
+        ctx.fillStyle = '#9aa4b4';
+        ctx.fillRect(-5, -6.5, 3, 13);
+
+        // 刀身：金属渐变（刀背深、开刃线、刃口亮白）
+        const steel = ctx.createLinearGradient(0, -4, 0, 5);
+        steel.addColorStop(0, '#aab6c6');
+        steel.addColorStop(0.52, '#d5dde8');
+        steel.addColorStop(0.56, '#f8fbff');
+        steel.addColorStop(1, '#ffffff');
+        ctx.fillStyle = steel;
+        this._bladePath(ctx);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(30, 41, 59, 0.55)';
+        ctx.lineWidth = 1;
+        this._bladePath(ctx);
+        ctx.stroke();
+
+        ctx.restore();
+    }
+
+    // 刀身轮廓：直刀背 + 弧形收尖 + 刃腹微鼓
+    _bladePath(ctx) {
+        ctx.beginPath();
+        ctx.moveTo(-2, -3.4);
+        ctx.lineTo(36, -3.4);
+        ctx.quadraticCurveTo(45, -2.6, 50, 0.6);
+        ctx.quadraticCurveTo(41, 4.6, 30, 4.8);
+        ctx.lineTo(-2, 4.8);
+        ctx.closePath();
     }
 
     isDead() {
@@ -1797,9 +1814,10 @@ class GameClient {
             this.triggerFlash('#ffffff', 0.12);
         }
 
-        // 添加刀挥动效果
+        // 添加刀挥动效果（以玩家中心为轴）
+        const psize = (this.gameConfig && this.gameConfig.PLAYER_SIZE) || 20;
         this.knifeSwingEffects.push(new KnifeSwingEffect(
-            attacker.x, attacker.y, 
+            attacker.x + psize / 2, attacker.y + psize / 2,
             message.targetX, message.targetY
         ));
 
@@ -1811,9 +1829,6 @@ class GameClient {
                 this.effects.push(new Effect(target.x, target.y, 'hit'));
             }
         }
-
-        // 显示近战攻击范围指示器
-        this.showMeleeRangeIndicator(message.x, message.y);
     }
 
     showMeleeRangeIndicator(x, y) {
