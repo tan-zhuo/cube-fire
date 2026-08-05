@@ -175,6 +175,61 @@ function randomRoomCode(len = 6) {
 let hostPeer = null;   // 房主的 PeerJS 实例
 let guestPeer = null;  // 访客的 PeerJS 实例
 
+// 构建标记：连接自检中显示，便于确认双方设备是否都在最新版本（排除缓存旧版）
+const CF_BUILD = '2026-08-05.2';
+
+// ---------- 连接自检：逐环节检测信令云 / STUN / TURN，定位加入失败原因 ----------
+async function runConnectivityTest() {
+    const el = $('connTestResult');
+    if (!el) return;
+    el.classList.remove('hidden');
+    const btn = $('connTestButton');
+    if (btn) btn.disabled = true;
+    const mark = ok => ok ? '[OK] ' : '[X] ';
+    el.textContent = I18N.t('diag.testing');
+
+    // 1. 信令云（房间码/房间列表全靠它）
+    const signalOk = await new Promise(resolve => {
+        let p = null;
+        const timer = setTimeout(() => { try { if (p) p.destroy(); } catch (e) {} resolve(false); }, 8000);
+        try {
+            p = new Peer(PEER_OPTS);
+            p.on('open', () => { clearTimeout(timer); try { p.destroy(); } catch (e) {} resolve(true); });
+            p.on('error', () => { clearTimeout(timer); try { p.destroy(); } catch (e) {} resolve(false); });
+        } catch (e) { clearTimeout(timer); resolve(false); }
+    });
+
+    // 2/3. 一次 ICE 收集，统计 STUN 反射候选与 TURN 中继候选
+    const cand = await new Promise(resolve => {
+        let srflx = 0, relay = 0;
+        try {
+            const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+            pc.createDataChannel('t');
+            const finish = () => { try { pc.close(); } catch (e) {} resolve({ srflx, relay }); };
+            const timer = setTimeout(finish, 8000);
+            pc.onicecandidate = e => {
+                if (!e.candidate) { clearTimeout(timer); finish(); return; }
+                if (e.candidate.type === 'srflx') srflx++;
+                if (e.candidate.type === 'relay') relay++;
+            };
+            pc.createOffer().then(o => pc.setLocalDescription(o)).catch(() => { clearTimeout(timer); finish(); });
+        } catch (e) { resolve({ srflx: 0, relay: 0 }); }
+    });
+
+    const lines = [
+        mark(signalOk) + I18N.t('diag.signal'),
+        mark(cand.srflx > 0) + I18N.t('diag.stun'),
+        mark(cand.relay > 0) + I18N.t('diag.turn'),
+    ];
+    if (!signalOk) lines.push(I18N.t('diag.hintSignal'));
+    else if (!cand.srflx && !cand.relay) lines.push(I18N.t('diag.hintIce'));
+    else if (!cand.relay) lines.push(I18N.t('diag.hintNoRelay'));
+    else lines.push(I18N.t('diag.hintOk'));
+    lines.push(I18N.t('diag.build') + ': ' + CF_BUILD);
+    el.textContent = lines.join('\n');
+    if (btn) btn.disabled = false;
+}
+
 // ---------- 房间列表：选举制目录节点 ----------
 // 所有页面竞争认领固定的 LOBBY_ID，抢到的浏览器临时兼任"房间目录"：
 // 房主向它心跳注册房间信息，访客向它拉取列表。目录页面关闭后 ID 释放，
@@ -1100,6 +1155,8 @@ document.addEventListener('DOMContentLoaded', () => {
         $('hostOptions').classList.remove('hidden');
         $('modeButtons').classList.remove('hidden');
     });
+    const connTestBtn = $('connTestButton');
+    if (connTestBtn) connTestBtn.addEventListener('click', runConnectivityTest);
     $('refreshRoomsButton').addEventListener('click', () => {
         renderRoomListError(I18N.t('lb.refreshing'));
         refreshRoomList();

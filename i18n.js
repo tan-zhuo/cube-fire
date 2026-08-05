@@ -194,6 +194,16 @@
         'lb.dirDown': '房间列表服务不可用（可能无网络）',
         'lb.listFail': '获取房间列表失败，稍后自动重试',
         'lb.refreshing': '正在刷新...',
+        'lb.diag': '连接自检',
+        'diag.testing': '正在逐项检测网络链路，约需 15 秒...',
+        'diag.signal': '信令云（房间码服务，0.peerjs.com）',
+        'diag.stun': 'STUN 打洞（跨设备发现）',
+        'diag.turn': 'TURN 中继（直连被拦时的兜底通道）',
+        'diag.hintSignal': '→ 信令云不可达：房间码/房间列表整体不可用。常见于网络屏蔽境外服务，可换网络/开热点重试，或改用下方手动邀请码（不依赖信令云）',
+        'diag.hintIce': '→ 打洞与中继都失败：当前网络对 WebRTC 限制很严。建议房主开手机热点，双方都连热点',
+        'diag.hintNoRelay': '→ 中继不可用（直连正常时无影响）；若对局双方直连失败则无法兜底',
+        'diag.hintOk': '→ 网络链路正常。若仍加入失败：确认双方都刷新到同一版本（见下方版本号）、房间码没过期、房主页面没有关闭',
+        'diag.build': '版本',
     };
 
     const en = {
@@ -385,6 +395,16 @@
         'lb.dirDown': 'Room list service unavailable (offline?)',
         'lb.listFail': 'Failed to fetch room list, retrying soon',
         'lb.refreshing': 'Refreshing...',
+        'lb.diag': 'Connection Test',
+        'diag.testing': 'Testing network links, ~15 seconds...',
+        'diag.signal': 'Signaling cloud (room codes, 0.peerjs.com)',
+        'diag.stun': 'STUN hole punching (peer discovery)',
+        'diag.turn': 'TURN relay (fallback when P2P is blocked)',
+        'diag.hintSignal': '→ Signaling cloud unreachable: room codes/room list won\'t work. Try another network/hotspot, or use manual invite codes below (no signaling needed)',
+        'diag.hintIce': '→ Both punching and relay failed: this network heavily restricts WebRTC. Host should create a phone hotspot for both devices',
+        'diag.hintNoRelay': '→ Relay unavailable (harmless if direct P2P works); no fallback if direct connection fails',
+        'diag.hintOk': '→ Network links look good. If joining still fails: make sure both devices refreshed to the same build (see version below), the code isn\'t expired, and the host page is still open',
+        'diag.build': 'Build',
     };
 
     const ja = {
@@ -576,6 +596,16 @@
         'lb.dirDown': 'ルーム一覧サービスが利用できません（オフライン？）',
         'lb.listFail': 'ルーム一覧の取得に失敗。まもなく再試行します',
         'lb.refreshing': '更新中...',
+        'lb.diag': '接続診断',
+        'diag.testing': 'ネットワークを検査中、約15秒...',
+        'diag.signal': 'シグナリングクラウド（ルームコード、0.peerjs.com）',
+        'diag.stun': 'STUNホールパンチ（ピア発見）',
+        'diag.turn': 'TURNリレー（P2P遮断時の中継）',
+        'diag.hintSignal': '→ シグナリングクラウドに接続不可：ルームコード/一覧が使えません。別のネットワークやテザリングを試すか、下の手動招待コード（シグナリング不要）をご利用ください',
+        'diag.hintIce': '→ ホールパンチもリレーも失敗：このネットワークはWebRTCを強く制限しています。ホストがテザリングを作成し両者で接続してください',
+        'diag.hintNoRelay': '→ リレー利用不可（直結できる場合は影響なし）。直結失敗時のフォールバックはありません',
+        'diag.hintOk': '→ ネットワークは正常です。それでも参加できない場合：両端末が同じバージョンか（下記Build）、コードの期限、ホストページが開いたままかを確認してください',
+        'diag.build': 'Build',
     };
 
     const LANGS = { zh, en, ja };

@@ -1872,6 +1872,17 @@
             color: var(--accent);
         }
 
+        .conn-test-result {
+            margin: 8px 0 0;
+            padding: 10px 12px;
+            border: 2px solid var(--line, #2b3350);
+            border-radius: 12px;
+            font-size: 12px;
+            line-height: 1.7;
+            color: var(--text-mid, #8b93ad);
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
         .room-list-bar {
             display: flex;
             justify-content: space-between;
@@ -2268,6 +2279,7 @@
                         <div id="roomList" class="room-list"><div class="room-list-empty" data-i18n="lp.roomListLoading">正在获取房间列表...</div></div>
                         <div class="room-list-bar">
                             <span id="recentRooms" class="recent-rooms"></span>
+                            <button id="connTestButton" class="room-refresh" data-i18n="lb.diag">连接自检</button>
                             <button id="refreshRoomsButton" class="room-refresh" data-i18n="lp.refresh">刷新列表</button>
                         </div>
                         <div class="room-code-row">
@@ -2275,6 +2287,7 @@
                             <button id="joinByCodeButton" class="btn" data-i18n="lp.joinBtn">加入</button>
                         </div>
                         <p id="guestStatus" class="panel-status"></p>
+                        <div id="connTestResult" class="conn-test-result hidden"></div>
                         <button id="manualJoinToggle" class="fallback-toggle" data-i18n="lp.manualToggle">纯离线局域网？使用手动邀请码连接</button>
                         <div id="manualJoinArea" class="hidden">
                             <div class="panel-step"><span class="step-badge">1</span><span data-i18n-html="lp.guestStep1">把房主发给你的<b>邀请码</b>粘贴到下面</span></div>
