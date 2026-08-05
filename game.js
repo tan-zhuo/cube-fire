@@ -553,18 +553,6 @@ class Effect {
                 }
                 break;
             }
-            case 'powerup':
-                for (let i = 0; i < 15; i++) {
-                    const angle = Math.random() * Math.PI * 2;
-                    const speed = 1 + Math.random() * 2;
-                    this.particles.push(new Particle(
-                        this.x, this.y,
-                        Math.cos(angle) * speed,
-                        Math.sin(angle) * speed,
-                        '#9b59b6', 60, 2
-                    ));
-                }
-                break;
             case 'melee':
                 // 近战攻击特效 - 扇形冲击波
                 for (let i = 0; i < 20; i++) {
@@ -589,7 +577,7 @@ class Effect {
                     ));
                 }
                 break;
-                
+
             case 'wallHit':
                 // 尘土（重力下落的灰粒）
                 for (let i = 0; i < 6; i++) {
@@ -769,7 +757,7 @@ class GameClient {
     constructor() {
         this.canvas = document.getElementById('gameCanvas');
         this.ctx = this.canvas.getContext('2d');
-        
+
         // 双缓冲系统
         this.backBuffer = document.createElement('canvas');
         this.backBuffer.width = this.canvas.width;
@@ -785,7 +773,6 @@ class GameClient {
         this.particles = [];
         this.effects = [];
         this.trailParticles = []; // 火箭烟迹/落地尘等松散粒子
-        this.meleeIndicators = [];
         this.knifeSwingEffects = [];
         this.damageNumbers = [];
         this.shakeMag = 0;
@@ -794,22 +781,22 @@ class GameClient {
         this.keys = {};
         this.mouse = { x: 0, y: 0 };
         this.lastUpdate = 0;
-        
+
         // 添加移动数据发送频率限制
         this.lastMoveUpdate = 0;
         this.moveUpdateInterval = 1000 / 60; // 60fps发送频率，与服务器同步
-        
+
         // 添加插值平滑参数
         this.interpolationFactor = 0.25; // 他人包时位置插值（减少漂移）
         this.otherFrameLerp = 0.2;       // 他人按帧平滑靠拢系数
         this.extrapolationDelayMs = 150; // 超过该间隔未收到新包开始外推
         this.extrapolationMaxMs = 200;   // 外推封顶时长，避免漂移过远
         this.lastServerTime = 0;
-        
+
         this.setupCanvas();
         this.setupEventListeners();
         this.setupUI();
-        
+
         // 初始化缩放比例
         this.scale = 1;
         this.scaleX = 1;
@@ -834,14 +821,14 @@ class GameClient {
         // 使用固定大小，与服务器配置一致
         this.canvas.width = 1200;
         this.canvas.height = 800;
-        
+
         // 更新双缓冲区尺寸
         this.backBuffer.width = this.canvas.width;
         this.backBuffer.height = this.canvas.height;
-        
+
         // 计算缩放比例
         this.updateScale();
-        
+
         // 监听窗口大小变化
         window.addEventListener('resize', () => {
             // 保持固定大小，但可以调整显示比例
@@ -853,17 +840,17 @@ class GameClient {
             this.updateScale();
         });
     }
-    
+
     updateScale() {
         // 计算画布的实际显示尺寸与原始尺寸的比例，考虑设备像素比
         const canvasRect = this.canvas.getBoundingClientRect();
         const devicePixelRatio = window.devicePixelRatio || 1;
-        
+
         // 计算基础缩放比例
         this.scaleX = canvasRect.width / 1200;
         this.scaleY = canvasRect.height / 800;
         this.scale = Math.min(this.scaleX, this.scaleY);
-        
+
         // 不需要再乘以devicePixelRatio，因为getBoundingClientRect已经是CSS像素
     }
 
@@ -901,7 +888,7 @@ class GameClient {
             // 使用CSS像素计算，不需要考虑devicePixelRatio
             this.mouse.x = ((e.clientX - rect.left) / rect.width) * 1200;
             this.mouse.y = ((e.clientY - rect.top) / rect.height) * 800;
-            
+
             // 确保坐标在有效范围内
             this.mouse.x = Math.max(0, Math.min(1200, this.mouse.x));
             this.mouse.y = Math.max(0, Math.min(800, this.mouse.y));
@@ -2002,6 +1989,8 @@ class GameClient {
             case 5: return 'weapon_smg';
             case 6: return 'weapon_shotgun';
             case 7: return 'weapon_sniper';
+            case 8: return 'weapon_rpg';
+            case 9: return 'grenade_pack';
             default: return 'unknown';
         }
     }
@@ -2124,24 +2113,6 @@ class GameClient {
             case 'weapon_shotgun': return '霰弹枪';
             case 'weapon_sniper': return '狙击枪';
             default: return '道具';
-        }
-    }
-
-    // 根据道具类型返回颜色与图标，确保视觉一致
-    getPowerupVisual(type) {
-        switch (type) {
-            case 'shield':
-                return { color: '#a78bfa', icon: '◆' };
-            case 'rapid_fire':
-            case 'rapidFire':
-                return { color: '#fbbf24', icon: '▲' };
-            case 'damage_boost':
-            case 'damageBoost':
-                return { color: '#f87171', icon: '●' };
-            case 'heal':
-                return { color: '#34d399', icon: '+' };
-            default:
-                return { color: '#95a5a6', icon: '?' };
         }
     }
 
@@ -2283,7 +2254,7 @@ class GameClient {
                 }
             });
         }
-        
+
         // 处理新子弹
         if (message.newBullets) {
             message.newBullets.forEach(bullet => {
@@ -2296,14 +2267,14 @@ class GameClient {
                 }
             });
         }
-        
+
         // 处理移除的子弹
         if (message.removedBullets) {
             message.removedBullets.forEach(bulletId => {
                 this.bullets = this.bullets.filter(b => b.id !== bulletId);
             });
         }
-        
+
         // 处理新道具
         if (message.newPowerups) {
             message.newPowerups.forEach(powerup => {
@@ -2312,24 +2283,24 @@ class GameClient {
                 }
             });
         }
-        
+
         // 处理移除的道具
         if (message.removedPowerups) {
             message.removedPowerups.forEach(powerupId => {
                 this.powerups = this.powerups.filter(p => p.id !== powerupId);
             });
         }
-        
+
         // 更新游戏计时器
         if (message.remainingTime !== undefined) {
             this.updateGameTimer(message.remainingTime);
         }
-        
+
         // 更新倒计时
         if (message.countdown !== undefined) {
             this.updateCountdown(message.countdown, message.showingResults);
         }
-        
+
         // 更新排行榜
         this.updateScoreboard();
     }
@@ -2434,10 +2405,10 @@ class GameClient {
         const killNotification = document.createElement('div');
         killNotification.className = 'kill-notification';
         killNotification.dataset.killId = killInfo.timestamp.toString();
-        
+
         // 根据武器类型选择强调色
         const weaponColor = killInfo.weapon === '近战' ? '#f87171' : '#fbbf24';
-        
+
         // 昵称是用户输入，必须用 textContent 防 XSS
         const killerSpan = document.createElement('span');
         killerSpan.className = 'killer';
@@ -2494,7 +2465,7 @@ class GameClient {
         const modal = document.getElementById('gameEndModal');
         const finalScores = document.getElementById('finalScores');
         const countdownValue = document.getElementById('countdownValue');
-        
+
         if (!modal || !finalScores || !countdownValue) return;
 
         // 显示最终排行榜
@@ -2564,15 +2535,15 @@ class GameClient {
     showNewGameModal(players, terrain, countdown) {
         const modal = document.getElementById('newGameModal');
         const countdownValue = document.getElementById('newGameCountdownValue');
-        
+
         if (!modal || !countdownValue) return;
 
         // 显示新游戏弹窗
         modal.classList.remove('hidden');
-        
+
         // 更新倒计时显示
         this.updateNewGameCountdown(countdown);
-        
+
         // 更新地形
         this.terrain = terrain || [];
     }
@@ -2596,7 +2567,7 @@ class GameClient {
         const newGameCountdownValue = document.getElementById('newGameCountdownValue');
         const gameEndModal = document.getElementById('gameEndModal');
         const newGameModal = document.getElementById('newGameModal');
-        
+
         if (showingResults) {
             // 显示游戏结束蒙版，隐藏新游戏蒙版
             if (gameEndModal) {
@@ -2605,7 +2576,7 @@ class GameClient {
             if (newGameModal) {
                 newGameModal.classList.add('hidden');
             }
-            
+
             // 更新游戏结束蒙版的倒计时
             if (countdownValue) {
                 countdownValue.textContent = countdown;
@@ -2618,13 +2589,13 @@ class GameClient {
             if (newGameModal) {
                 newGameModal.classList.remove('hidden');
             }
-            
+
             // 更新新游戏蒙版的倒计时
             if (newGameCountdownValue) {
                 newGameCountdownValue.textContent = countdown;
             }
         }
-        
+
         // 注意：不在这里隐藏蒙版，让蒙版显示完整的倒计时
         // 蒙版会在 gameStarted 消息中隐藏
     }
@@ -2678,49 +2649,6 @@ class GameClient {
                 this.effects.push(new Effect(target.x, target.y, 'hit'));
             }
         }
-    }
-
-    showMeleeRangeIndicator(x, y) {
-        // 创建近战攻击范围指示器
-        const indicator = {
-            x: x,
-            y: y,
-            radius: 30, // 近战攻击范围
-            life: 30, // 显示30帧
-            maxLife: 30
-        };
-        
-        this.meleeIndicators = this.meleeIndicators || [];
-        this.meleeIndicators.push(indicator);
-    }
-
-    drawMeleeIndicators() {
-        this.meleeIndicators.forEach(indicator => {
-            const alpha = indicator.life / indicator.maxLife;
-            
-            // 绘制近战攻击范围圆圈
-            this.backCtx.save();
-            this.backCtx.globalAlpha = alpha * 0.3;
-            this.backCtx.strokeStyle = '#e74c3c';
-            this.backCtx.lineWidth = 2;
-            this.backCtx.beginPath();
-            this.backCtx.arc(indicator.x, indicator.y, indicator.radius, 0, Math.PI * 2);
-            this.backCtx.stroke();
-            
-            // 绘制内部填充
-            this.backCtx.globalAlpha = alpha * 0.1;
-            this.backCtx.fillStyle = '#e74c3c';
-            this.backCtx.fill();
-            
-            // 绘制中心点
-            this.backCtx.globalAlpha = alpha;
-            this.backCtx.fillStyle = '#e74c3c';
-            this.backCtx.beginPath();
-            this.backCtx.arc(indicator.x, indicator.y, 3, 0, Math.PI * 2);
-            this.backCtx.fill();
-            
-            this.backCtx.restore();
-        });
     }
 
     // 道具箱：2.5D 悬浮补给箱（武器箱金木色/增益箱青蓝色，具体内容拾取时揭示）
@@ -2801,7 +2729,7 @@ class GameClient {
     startGameLoop() {
         let lastFrameTime = 0;
         const targetFrameTime = 1000 / 60; // 60fps
-        
+
         const gameLoop = (timestamp) => {
             // rAF 已与显示器刷新率同步，直接每帧更新渲染（门控会导致周期性跳帧）
             this.update(timestamp);
@@ -2824,7 +2752,7 @@ class GameClient {
                 this.msgsUpCount = 0;
                 this.lastRateTime = nowPerf;
             }
-            
+
             requestAnimationFrame(gameLoop);
         };
         requestAnimationFrame(gameLoop);
@@ -2832,10 +2760,10 @@ class GameClient {
 
     update(timestamp) {
         if (!this.playerId || !this.gameConfig) return;
-        
+
         const deltaTime = timestamp - this.lastUpdate;
         this.lastUpdate = timestamp;
-        
+
         // 更新玩家移动
         this.updatePlayerMovement();
 
@@ -2856,7 +2784,7 @@ class GameClient {
             if (p.lastServerUpdate === undefined) p.lastServerUpdate = nowMs;
             if (p.serverVx === undefined) p.serverVx = 0;
             if (p.serverVy === undefined) p.serverVy = 0;
-            
+
             // 基于服务器速度的短时外推
             let toX = p.targetX;
             let toY = p.targetY;
@@ -2865,7 +2793,7 @@ class GameClient {
                 toX += p.serverVx * since;
                 toY += p.serverVy * since;
             }
-            
+
             // 按帧平滑靠拢
             const prevX = p.x;
             const prevY = p.y;
@@ -2873,14 +2801,14 @@ class GameClient {
             else p.x = toX;
             if (typeof p.y === 'number') p.y += (toY - p.y) * this.otherFrameLerp;
             else p.y = toY;
-            
+
             // 更新用于渲染拖尾的速度（每帧位移）
             if (prevX !== undefined && prevY !== undefined) {
                 p.vx = p.x - prevX;
                 p.vy = p.y - prevY;
             }
         });
-        
+
         // 更新子弹
         this.bullets = this.bullets.filter(bullet => {
             // 手雷：本地也模拟撞墙/边界停驻，消失由服务器 removedBullets 控制
@@ -2931,7 +2859,7 @@ class GameClient {
             return bullet.x > 0 && bullet.x < this.canvas.width &&
                    bullet.y > 0 && bullet.y < this.canvas.height;
         });
-        
+
         // 更新特效
         this.effects = this.effects.filter(effect => {
             effect.update();
@@ -2942,12 +2870,6 @@ class GameClient {
         this.trailParticles = this.trailParticles.filter(p => {
             p.update();
             return !p.isDead();
-        });
-
-        // 更新近战攻击指示器
-        this.meleeIndicators = this.meleeIndicators.filter(indicator => {
-            indicator.life--;
-            return indicator.life > 0;
         });
 
         // 更新刀挥动效果
@@ -2961,23 +2883,24 @@ class GameClient {
             d.update();
             return !d.isDead();
         });
-        
+
         // 更新UI
         this.updateUI();
     }
 
     updatePlayerMovement() {
         if (!this.playerId || !this.gameConfig || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-        
+
         const player = this.players.get(this.playerId);
         if (!player || !player.isAlive) return;
-        
+
         const currentTime = Date.now();
-        
+
         let dx = 0, dy = 0;
-        // 使用固定的移动速度，不受屏幕尺寸影响
-        const speed = this.gameConfig.PLAYER_SPEED || 5;
-        
+        // 使用固定的移动速度，不受屏幕尺寸影响；感染者移速 +25%
+        let speed = this.gameConfig.PLAYER_SPEED || 5;
+        if (this.gameConfig.GAME_MODE === 'infect' && player.team === 1) speed *= 1.25;
+
         if (this.keys['w'] || this.keys['arrowup']) dy -= speed;
         if (this.keys['s'] || this.keys['arrowdown']) dy += speed;
         if (this.keys['a'] || this.keys['arrowleft']) dx -= speed;
@@ -3004,12 +2927,12 @@ class GameClient {
             this.mouse.x = player.x + playerSize / 2 + (dx / speed) * 140;
             this.mouse.y = player.y + playerSize / 2 + (dy / speed) * 140;
         }
-        const angle = Math.atan2(this.mouse.y - (player.y + playerSize / 2), 
+        const angle = Math.atan2(this.mouse.y - (player.y + playerSize / 2),
                                this.mouse.x - (player.x + playerSize / 2));
-        
+
         // 只更新角度，不更新位置（等待服务器确认）
         player.angle = angle;
-        
+
         // 检查是否需要发送数据到服务器（频率限制）
         if (currentTime - this.lastMoveUpdate >= this.moveUpdateInterval) {
             // 先计算本地可行走的新位置（带本地碰撞预判 + 轴向分离）
@@ -3051,7 +2974,7 @@ class GameClient {
             // 检查是否有实际变化
             const hasPositionChange = (Math.abs(finalX - oldX) > 0.001 || Math.abs(finalY - oldY) > 0.001);
             const hasAngleChange = Math.abs(angle - (player.lastServerAngle || 0)) > 0.02; // 更小的角度变化阈值
-            
+
             if (hasPositionChange || hasAngleChange) {
                 // 发送二进制MOVE
                 const enc = new BinaryEncoder().init(32);
@@ -3060,13 +2983,13 @@ class GameClient {
                 enc.writeFloat32(hasPositionChange ? finalY : oldY);
                 enc.writeFloat32(angle);
                 this.ws.send(enc.getBuffer());
-                
+
                 // 本地乐观应用（预测）
                 if (hasPositionChange) {
                     player.x = finalX;
                     player.y = finalY;
                 }
-                
+
                 // 记录发送时间和角度
                 this.lastMoveUpdate = currentTime;
                 player.lastServerAngle = angle;
@@ -3215,15 +3138,15 @@ class GameClient {
             console.log('近战攻击失败: 没有玩家ID');
             return;
         }
-        
+
         const player = this.players.get(this.playerId);
         if (!player || !player.isAlive) {
             console.log('近战攻击失败: 玩家不存在或已死亡');
             return;
         }
-        
+
         // 近战攻击特效将在服务器响应后通过handleMeleeAttack处理
-        
+
         const enc = new BinaryEncoder().init(24);
         enc.writeUint8(MESSAGE_TYPES.MELEE);
         enc.writeFloat32(this.mouse.x);
@@ -3233,7 +3156,7 @@ class GameClient {
 
     respawn() {
         if (!this.playerId) return;
-        
+
         const enc = new BinaryEncoder().init(8);
         enc.writeUint8(MESSAGE_TYPES.RESPAWN);
         this.ws.send(enc.getBuffer());
@@ -3241,12 +3164,12 @@ class GameClient {
 
     updateUI() {
         if (!this.playerId) return;
-        
+
         const player = this.players.get(this.playerId);
         if (player) {
             const health = Math.max(0, player.health);
             const healthPercent = (health / 100) * 100;
-            
+
             // 更新血量显示（颜色状态由 CSS class 控制）
             document.getElementById('health').textContent = health;
             const healthFill = document.getElementById('healthFill');
@@ -3437,7 +3360,7 @@ class GameClient {
         // 清空后台缓冲区（卡通风：明快的靛蓝场地）
         this.backCtx.fillStyle = '#333d78';
         this.backCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-        
+
         // 屏幕震动偏移
         this.shakeMag = (this.shakeMag || 0) * 0.85;
         if (this.shakeMag < 0.1) this.shakeMag = 0;
@@ -3474,14 +3397,13 @@ class GameClient {
         this.bullets.forEach(bullet => {
             this.drawBullet(bullet);
         });
-        
+
         // 绘制特效
         this.effects.forEach(effect => {
             effect.draw(this.backCtx);
         });
 
         // 绘制近战攻击指示器
-        this.drawMeleeIndicators();
 
         // 绘制刀挥动效果
         this.knifeSwingEffects.forEach(effect => {
@@ -3566,7 +3488,7 @@ class GameClient {
         this.backCtx.save();
         this.backCtx.translate(player.x + size / 2, player.y + size / 2);
         this.backCtx.rotate(player.angle);
-        
+
         // 玩家身体（卡通风：圆角方块 + 粗描边 + 顶部高光）
         const bodyColor = player.isAlive ? (player.color || '#3498db') : '#8a93a5';
         const bodyGrad = this.backCtx.createLinearGradient(0, -size / 2, 0, size / 2);
@@ -3662,7 +3584,7 @@ class GameClient {
                 this.backCtx.stroke();
             }
         }
-        
+
         // 感染者：僵尸前爪替代枪械 + 身上疤痕
         const isZombie = this.gameConfig && this.gameConfig.GAME_MODE === 'infect' &&
             player.team === 1 && player.isAlive;
@@ -3762,42 +3684,42 @@ class GameClient {
             this.backCtx.stroke();
             this.backCtx.restore();
         }
-        
+
         // 绘制血条
         if (player.isAlive) {
             const barWidth = size;
             const barHeight = 4;
             const healthPercent = player.health / 100;
-            
+
             // 血条背景
             this.backCtx.fillStyle = '#e74c3c';
             this.backCtx.fillRect(player.x, player.y - 15, barWidth, barHeight);
-            
+
             // 当前血量
             this.backCtx.fillStyle = '#27ae60';
             this.backCtx.fillRect(player.x, player.y - 15, barWidth * healthPercent, barHeight);
         }
-        
+
         // 绘制昵称（在血条上方，分队模式下按队伍着色）
         this.backCtx.fillStyle = player.team === 1 ? '#ffb0a3' : player.team === 2 ? '#a8d4f7' : '#ffffff';
         this.backCtx.font = '12px Arial';
         this.backCtx.textAlign = 'center';
         this.backCtx.fillText(player.nickname, player.x + size / 2, player.y - 20);
-        
-        
+
+
         // 绘制buff效果
         this.drawPlayerBuffs(player, size);
-        
+
         // 绘制道具状态信息（在角色上方）
         this.drawPlayerPowerupStatus(player, size);
-        
+
         // 添加角色动画效果
         this.drawPlayerAnimation(player, size);
     }
 
     drawPlayerBuffMarkers(player, size) {
         if (!player.powerups) return;
-        
+
         const time = Date.now();
         const centerX = player.x + size / 2;
         const centerY = player.y + size + 10; // 在角色下方
@@ -3921,7 +3843,7 @@ class GameClient {
         this.backCtx.fill();
         this.backCtx.globalCompositeOperation = 'source-over';
         this.backCtx.globalAlpha = 1;
-        
+
         // 添加闪烁效果
         this.backCtx.shadowBlur = 0;
         this.backCtx.fillStyle = '#ffffff';
@@ -4034,45 +3956,18 @@ class GameClient {
         // buff持续时间显示
         this.drawBuffTimers(player, centerX, centerY - size / 2 - 20, time);
     }
-    
-    // 绘制星星的辅助函数
-    drawStar(cx, cy, spikes, outerRadius, innerRadius) {
-        let rot = Math.PI / 2 * 3;
-        let x = cx;
-        let y = cy;
-        const step = Math.PI / spikes;
-        
-        this.backCtx.beginPath();
-        this.backCtx.moveTo(cx, cy - outerRadius);
-        
-        for (let i = 0; i < spikes; i++) {
-            x = cx + Math.cos(rot) * outerRadius;
-            y = cy + Math.sin(rot) * outerRadius;
-            this.backCtx.lineTo(x, y);
-            rot += step;
-            
-            x = cx + Math.cos(rot) * innerRadius;
-            y = cy + Math.sin(rot) * innerRadius;
-            this.backCtx.lineTo(x, y);
-            rot += step;
-        }
-        
-        this.backCtx.lineTo(cx, cy - outerRadius);
-        this.backCtx.closePath();
-        this.backCtx.fill();
-    }
-    
+
     // 绘制玩家道具状态信息
     drawPlayerPowerupStatus(player, size) {
         if (!player.powerups) return;
-        
+
         const time = Date.now();
         const centerX = player.x + size / 2;
         const baseY = player.y - 40; // 在昵称上方
-        
+
         // 获取当前生效的道具
         const activePowerups = [];
-        
+
         if (player.powerups.shield && player.powerups.shield.active) {
             const remainingTime = (player.powerups.shield.endTime - time) / 1000;
             if (remainingTime > 0) {
@@ -4085,7 +3980,7 @@ class GameClient {
                 });
             }
         }
-        
+
         if (player.powerups.rapidFire && player.powerups.rapidFire.active) {
             const remainingTime = (player.powerups.rapidFire.endTime - time) / 1000;
             if (remainingTime > 0) {
@@ -4098,7 +3993,7 @@ class GameClient {
                 });
             }
         }
-        
+
         if (player.powerups.damageBoost && player.powerups.damageBoost.active) {
             const remainingTime = (player.powerups.damageBoost.endTime - time) / 1000;
             if (remainingTime > 0) {
@@ -4111,7 +4006,7 @@ class GameClient {
                 });
             }
         }
-        
+
         if (player.powerups.heal && player.powerups.heal.active) {
             const remainingTime = (player.powerups.heal.endTime - time) / 1000;
             if (remainingTime > 0) {
@@ -4124,44 +4019,44 @@ class GameClient {
                 });
             }
         }
-        
+
         if (activePowerups.length === 0) return;
-        
+
         // 绘制背景框
         const boxWidth = Math.max(120, activePowerups.length * 100);
         const boxHeight = 25 + activePowerups.length * 20;
         const boxX = centerX - boxWidth / 2;
         const boxY = baseY - boxHeight;
-        
+
         this.backCtx.save();
         this.backCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
         this.backCtx.fillRect(boxX, boxY, boxWidth, boxHeight);
         this.backCtx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
         this.backCtx.lineWidth = 1;
         this.backCtx.strokeRect(boxX, boxY, boxWidth, boxHeight);
-        
+
         // 绘制道具信息
         activePowerups.forEach((powerup, index) => {
             const itemY = boxY + 15 + index * 20;
-            
+
             // 绘制图标
             this.backCtx.font = '14px Arial';
             this.backCtx.textAlign = 'left';
             this.backCtx.fillStyle = powerup.color;
             this.backCtx.fillText(powerup.icon, boxX + 5, itemY);
-            
+
             // 绘制道具名称
             this.backCtx.font = '12px Arial';
             this.backCtx.fillStyle = '#ffffff';
             this.backCtx.fillText(powerup.name, boxX + 25, itemY);
-            
+
             // 绘制剩余时间
             const timeText = `${Math.ceil(powerup.remainingTime)}s`;
             this.backCtx.font = '11px Arial';
             this.backCtx.textAlign = 'right';
             this.backCtx.fillStyle = powerup.remainingTime < 5 ? '#ff6b6b' : '#95a5a6';
             this.backCtx.fillText(timeText, boxX + boxWidth - 5, itemY);
-            
+
             // 绘制进度条
             const totalDurationSec = (this.gameConfig && this.gameConfig.POWERUP_DURATION ? this.gameConfig.POWERUP_DURATION / 1000 : 15);
             const progress = Math.max(0, Math.min(1, powerup.remainingTime / totalDurationSec)); // 按配置总时间
@@ -4169,35 +4064,35 @@ class GameClient {
             const barHeight = 3;
             const barX = boxX + 5;
             const barY = itemY + 5;
-            
+
             // 进度条背景
             this.backCtx.fillStyle = 'rgba(255, 255, 255, 0.2)';
             this.backCtx.fillRect(barX, barY, barWidth, barHeight);
-            
+
             // 进度条填充
             this.backCtx.fillStyle = powerup.color;
             this.backCtx.fillRect(barX, barY, barWidth * progress, barHeight);
         });
-        
+
         this.backCtx.restore();
     }
-    
+
     // 角色动画效果
     drawPlayerAnimation(player, size) {
         if (!player.isAlive) return;
-        
+
         const centerX = player.x + size / 2;
         const centerY = player.y + size / 2;
         const time = Date.now();
-        
+
         // 呼吸动画（角色边缘轻微变化）
         const breathScale = 1 + Math.sin(time * 0.003) * 0.03;
-        
+
         this.backCtx.save();
         this.backCtx.translate(centerX, centerY);
         this.backCtx.scale(breathScale, breathScale);
         this.backCtx.translate(-centerX, -centerY);
-        
+
         // 绘制角色光晕
         const glowGradient = this.backCtx.createRadialGradient(
             centerX, centerY, size * 0.3,
@@ -4205,14 +4100,14 @@ class GameClient {
         );
         glowGradient.addColorStop(0, player.color + '30');
         glowGradient.addColorStop(1, player.color + '00');
-        
+
         this.backCtx.fillStyle = glowGradient;
         this.backCtx.beginPath();
         this.backCtx.arc(centerX, centerY, size * 0.8, 0, Math.PI * 2);
         this.backCtx.fill();
-        
+
         this.backCtx.restore();
-        
+
         // 如果角色在移动，添加运动迹迹
         if (player.isMoving) {
             for (let i = 1; i <= 3; i++) {
@@ -4221,59 +4116,59 @@ class GameClient {
                 this.backCtx.globalAlpha = trailAlpha;
                 this.backCtx.fillStyle = player.color;
                 this.backCtx.beginPath();
-                
+
                 // 根据移动方向绘制迹迹
                 const trailX = centerX - (player.vx || 0) * i * 2;
                 const trailY = centerY - (player.vy || 0) * i * 2;
-                
+
                 this.backCtx.arc(trailX, trailY, size * 0.3 * (4 - i) / 4, 0, Math.PI * 2);
                 this.backCtx.fill();
                 this.backCtx.restore();
             }
         }
     }
-    
+
     // 显示buff剩余时间
     drawBuffTimers(player, centerX, baseY, time) {
         if (!player.powerups) return;
-        
+
         const buffTypes = [
             { key: 'shield', color: '#a78bfa', icon: '◆' },
             { key: 'rapidFire', color: '#fbbf24', icon: '▲' },
             { key: 'damageBoost', color: '#f87171', icon: '●' }
         ];
-        
+
         let displayIndex = 0;
         const totalDurationSec = (this.gameConfig && this.gameConfig.POWERUP_DURATION ? this.gameConfig.POWERUP_DURATION / 1000 : 15);
-        
+
         buffTypes.forEach(buff => {
             if (player.powerups[buff.key] && player.powerups[buff.key].active) {
                 const remainingTime = (player.powerups[buff.key].endTime - time) / 1000;
                 const progress = Math.max(0, Math.min(1, remainingTime / totalDurationSec));
-                
+
                 if (remainingTime > 0) {
                     const timerY = baseY - displayIndex * 8;
-                    
+
                     // 绘制buff图标
                     this.backCtx.save();
                     this.backCtx.font = '12px Arial';
                     this.backCtx.textAlign = 'center';
                     this.backCtx.fillStyle = buff.color;
                     this.backCtx.fillText(buff.icon, centerX - 20, timerY);
-                    
+
                     // 绘制进度条背景
                     this.backCtx.fillStyle = '#333333';
                     this.backCtx.fillRect(centerX - 10, timerY - 3, 30, 6);
-                    
+
                     // 绘制进度条
                     this.backCtx.fillStyle = buff.color;
                     this.backCtx.fillRect(centerX - 10, timerY - 3, 30 * progress, 6);
-                    
+
                     // 绘制进度条边框
                     this.backCtx.strokeStyle = '#ffffff';
                     this.backCtx.lineWidth = 1;
                     this.backCtx.strokeRect(centerX - 10, timerY - 3, 30, 6);
-                    
+
                     this.backCtx.restore();
                     displayIndex++;
                 }

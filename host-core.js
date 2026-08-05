@@ -165,7 +165,7 @@ const MESSAGE_TYPES = {
     RESPAWN: 5,
     CHAT: 6,
     PING: 7,
-    
+
     // 服务器发送的消息
     JOINED: 10,
     PLAYER_JOINED: 11,
@@ -198,44 +198,44 @@ class BinaryEncoder {
         this.view = null;
         this.offset = 0;
     }
-    
+
     init(size = 1024) {
         this.buffer = new ArrayBuffer(size);
         this.view = new DataView(this.buffer);
         this.offset = 0;
         return this;
     }
-    
+
     writeUint8(value) {
         this.view.setUint8(this.offset, value);
         this.offset += 1;
         return this;
     }
-    
+
     writeUint16(value) {
         this.view.setUint16(this.offset, value, true); // little endian
         this.offset += 2;
         return this;
     }
-    
+
     writeInt16(value) {
         this.view.setInt16(this.offset, value, true);
         this.offset += 2;
         return this;
     }
-    
+
     writeUint32(value) {
         this.view.setUint32(this.offset, value, true);
         this.offset += 4;
         return this;
     }
-    
+
     writeFloat32(value) {
         this.view.setFloat32(this.offset, value, true);
         this.offset += 4;
         return this;
     }
-    
+
     writeString(str) {
         const encoder = new TextEncoder();
         const bytes = encoder.encode(str);
@@ -244,7 +244,7 @@ class BinaryEncoder {
         this.offset += bytes.length;
         return this;
     }
-    
+
     getBuffer() {
         return this.buffer.slice(0, this.offset);
     }
@@ -285,7 +285,7 @@ function encodeIncrementalUpdate(update) {
     enc.writeUint32(ts);
     enc.writeUint32(Math.max(0, update.remainingTime || 0));
     enc.writeUint8(update.isGameEnded ? 1 : 0);
-    
+
     // 新玩家
     if (update.newPlayers && update.newPlayers.length > 0) {
         enc.writeUint8(0x10);
@@ -357,7 +357,7 @@ function encodeIncrementalUpdate(update) {
             }
         });
     }
-    
+
     // 新子弹
     if (update.newBullets && update.newBullets.length > 0) {
         enc.writeUint8(0x03);
@@ -372,14 +372,14 @@ function encodeIncrementalUpdate(update) {
             enc.writeUint8(b.kind | 0);
         });
     }
-    
+
     // 移除子弹
     if (update.removedBullets && update.removedBullets.length > 0) {
         enc.writeUint8(0x13);
         enc.writeUint16(update.removedBullets.length);
         update.removedBullets.forEach(id => enc.writeString(String(id)));
     }
-    
+
     // 新道具
     if (update.newPowerups && update.newPowerups.length > 0) {
         enc.writeUint8(0x04);
@@ -391,14 +391,14 @@ function encodeIncrementalUpdate(update) {
             enc.writeUint8(getPowerupTypeId(p.type));
         });
     }
-    
+
     // 移除道具
     if (update.removedPowerups && update.removedPowerups.length > 0) {
         enc.writeUint8(0x14);
         enc.writeUint16(update.removedPowerups.length);
         update.removedPowerups.forEach(id => enc.writeUint32(id));
     }
-    
+
     // 结束标识
     enc.writeUint8(0xFF);
     return enc.getBuffer();
@@ -555,31 +555,31 @@ class BinaryDecoder {
         this.view = new DataView(buffer);
         this.offset = 0;
     }
-    
+
     readUint8() {
         const value = this.view.getUint8(this.offset);
         this.offset += 1;
         return value;
     }
-    
+
     readUint16() {
         const value = this.view.getUint16(this.offset, true);
         this.offset += 2;
         return value;
     }
-    
+
     readUint32() {
         const value = this.view.getUint32(this.offset, true);
         this.offset += 4;
         return value;
     }
-    
+
     readFloat32() {
         const value = this.view.getFloat32(this.offset, true);
         this.offset += 4;
         return value;
     }
-    
+
     readString() {
         const length = this.readUint16();
         const bytes = new Uint8Array(this.view.buffer, this.offset, length);
@@ -592,13 +592,13 @@ class BinaryDecoder {
 // 编码游戏状态更新消息
 function encodeGameStateUpdate(gameState) {
     const encoder = new BinaryEncoder().init(8192);
-    
+
     encoder.writeUint8(MESSAGE_TYPES.GAME_UPDATE);
-    
+
     // 写入玩家数量
     const players = Array.from(gameState.players.values());
     encoder.writeUint16(players.length);
-    
+
     // 写入每个玩家数据
     players.forEach(player => {
         encoder.writeUint32(player.id);
@@ -640,7 +640,7 @@ function encodeGameStateUpdate(gameState) {
         encoder.writeUint8(bullet.damage);
         encoder.writeUint8(bullet.kind | 0);
     });
-    
+
     // 写入道具数量和数据
     encoder.writeUint16(gameState.powerups.length);
     gameState.powerups.forEach(powerup => {
@@ -654,7 +654,7 @@ function encodeGameStateUpdate(gameState) {
         encoder.writeFloat32(powerup.x);
         encoder.writeFloat32(powerup.y);
     });
-    
+
     // 写入剩余时间（毫秒）
     let remainingTime = 0;
     if (gameState.gameStartTime && !gameState.isGameEnded) {
@@ -744,7 +744,7 @@ function decodeMessage(buffer) {
     try {
         const decoder = new BinaryDecoder(buffer);
         const messageType = decoder.readUint8();
-        
+
         switch (messageType) {
             case MESSAGE_TYPES.JOIN:
                 return {
@@ -752,7 +752,7 @@ function decodeMessage(buffer) {
                     nickname: decoder.readString(),
                     clientTime: decoder.readUint32()
                 };
-                
+
             case MESSAGE_TYPES.MOVE:
                 return {
                     type: 'move',
@@ -760,7 +760,7 @@ function decodeMessage(buffer) {
                     y: decoder.readFloat32(),
                     angle: decoder.readFloat32()
                 };
-                
+
             case MESSAGE_TYPES.SHOOT:
                 return {
                     type: 'shoot',
@@ -777,29 +777,29 @@ function decodeMessage(buffer) {
                     targetX: decoder.readFloat32(),
                     targetY: decoder.readFloat32()
                 };
-                
+
             case MESSAGE_TYPES.MELEE:
                 return {
                     type: 'melee',
                     targetX: decoder.readFloat32(),
                     targetY: decoder.readFloat32()
                 };
-                
+
             case MESSAGE_TYPES.RESPAWN:
                 return { type: 'respawn' };
-            
+
             case MESSAGE_TYPES.CHAT:
                 return {
                     type: 'chatMessage',
                     content: decoder.readString()
                 };
-                
+
             case MESSAGE_TYPES.PING:
                 return {
                     type: 'ping',
                     timestamp: decoder.readUint32()
                 };
-                
+
             default:
                 console.log('未知的二进制消息类型:', messageType);
                 return null;
@@ -930,13 +930,13 @@ class Player {
         this.meleeCooldown = GAME_CONFIG.MELEE_COOLDOWN; // 近战攻击冷却时间
         this.team = 0; // 0=无队伍（个人混战），1=红队，2=蓝队
         this.color = PLAYER_COLORS[(id - 1) % PLAYER_COLORS.length]; // 根据ID分配颜色（分队模式下由applyTeamColor覆盖）
-        
+
         // 移动状态跟踪
         this.vx = 0;
         this.vy = 0;
         this.isMoving = false;
         this.lastMoveTime = 0;
-        
+
         // 道具效果
         this.powerups = {
             shield: { active: false, endTime: 0 },
@@ -952,7 +952,7 @@ class Player {
                 this.respawn();
             }
         }
-        
+
         // 更新移动状态
         const now = Date.now();
         if (this.lastMoveTime && (now - this.lastMoveTime) > 100) {
@@ -960,7 +960,7 @@ class Player {
             this.vx = 0;
             this.vy = 0;
         }
-        
+
         // 更新道具效果
         Object.keys(this.powerups).forEach(key => {
             if (this.powerups[key].active && now > this.powerups[key].endTime) {
@@ -1007,13 +1007,13 @@ class Player {
         this.reloading = true;
         this.reloadEnd = Date.now() + w.reloadMs;
     }
-    
+
     move(dx, dy) {
         if (!this.isAlive) return;
-        
+
         const size = GAME_CONFIG.PLAYER_SIZE;
         let movedX = false, movedY = false;
-        
+
         // 先沿X轴尝试移动（轴向分离），如果不碰撞则更新X
         if (dx !== 0) {
             const tryX = this.x + dx;
@@ -1028,7 +1028,7 @@ class Player {
         } else {
             this.vx = 0;
         }
-        
+
         // 再沿Y轴尝试移动
         if (dy !== 0) {
             const tryY = this.y + dy;
@@ -1043,7 +1043,7 @@ class Player {
         } else {
             this.vy = 0;
         }
-        
+
         this.isMoving = movedX || movedY;
         if (this.isMoving) {
             this.lastMoveTime = Date.now();
@@ -1055,8 +1055,8 @@ class Player {
         const spawn = findSpawnPosition(this.team, this.id);
         this.x = spawn.x;
         this.y = spawn.y;
-        // 感染者体质更强（150 血）
-        this.health = (matchConfig.infectMode && this.team === 1) ? 150 : GAME_CONFIG.MAX_HEALTH;
+        // 感染者体质更强（180 血）
+        this.health = (matchConfig.infectMode && this.team === 1) ? 180 : GAME_CONFIG.MAX_HEALTH;
         this.isAlive = true;
         this.respawnTime = 0;
         this.equipWeapon('rifle'); // 复活重置为默认武器
@@ -1098,12 +1098,12 @@ class Player {
 
     takeDamage(damage) {
         if (!this.isAlive) return;
-        
+
         // 护盾效果：减少50%伤害
         if (this.powerups.shield.active) {
             damage = Math.floor(damage * 0.5);
         }
-        
+
         this.health -= damage;
         if (this.health <= 0) {
             this.isAlive = false;
@@ -1138,14 +1138,14 @@ class Player {
 
         this.lastShot = Date.now();
         this.mag--;
-        
+
         // 计算子弹方向
         const centerX = this.x + GAME_CONFIG.PLAYER_SIZE / 2;
         const centerY = this.y + GAME_CONFIG.PLAYER_SIZE / 2;
         let dx = targetX - centerX;
         let dy = targetY - centerY;
         let distance = Math.sqrt(dx * dx + dy * dy);
-        
+
         // 距离过小（例如点击在玩家中心）使用当前朝向作为方向，避免产生 NaN
         let dirX, dirY;
         if (!distance || distance < 1e-3) {
@@ -1160,7 +1160,7 @@ class Player {
             dirX = dx / distance;
             dirY = dy / distance;
         }
-        
+
         // 将子弹出生点前移，避免与自身或紧贴的墙体立即发生碰撞
         const w = WEAPONS[this.weapon];
         const muzzleOffset = GAME_CONFIG.PLAYER_SIZE / 2 + 4;
@@ -1212,20 +1212,20 @@ class Player {
         if (!this.canMelee()) return false;
 
         this.lastMelee = Date.now();
-        
+
         // 计算攻击方向
         const dx = targetX - this.x;
         const dy = targetY - this.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
-        
+
         // 近战攻击总是执行，不管目标距离多远
-        
+
         // 计算伤害
         let damage = GAME_CONFIG.MELEE_DAMAGE;
         if (this.powerups.damageBoost.active) {
             damage = Math.floor(damage * 1.5);
         }
-        
+
         // 查找攻击范围内的玩家（分队模式下不伤害队友）
         let hitPlayer = null;
         gameState.players.forEach(player => {
@@ -1233,17 +1233,17 @@ class Player {
                 const playerDx = player.x - this.x;
                 const playerDy = player.y - this.y;
                 const playerDistance = Math.sqrt(playerDx * playerDx + playerDy * playerDy);
-                
+
                 if (playerDistance <= GAME_CONFIG.MELEE_RANGE) {
                     hitPlayer = player;
                 }
             }
         });
-        
+
         if (hitPlayer) {
             const wasAlive = hitPlayer.isAlive;
             hitPlayer.takeDamage(damage);
-            
+
             if (wasAlive && !hitPlayer.isAlive) {
                 // 击杀
                 this.score = Math.min(65535, (this.score || 0) + 100);
@@ -1256,7 +1256,9 @@ class Player {
                     timestamp: Date.now()
                 };
                 gameState.killFeed.push(killInfo);
-                
+        if (gameState.killFeed.length > 50) gameState.killFeed.shift();
+                if (gameState.killFeed.length > 50) gameState.killFeed.shift();
+
                 // 立即广播击杀信息
                 broadcast({
                     type: 'killFeed',
@@ -1266,7 +1268,7 @@ class Player {
                 // 击中但未击杀
                 this.score = Math.min(65535, (this.score || 0) + 10);
             }
-            
+
             // 广播近战攻击事件
             broadcast({
                 type: 'meleeAttack',
@@ -1293,7 +1295,7 @@ class Player {
                 y: this.y
             });
         }
-        
+
         return true;
     }
 }
@@ -1329,7 +1331,7 @@ class Bullet {
     }
 
     isDead() {
-        return this.life <= 0 || 
+        return this.life <= 0 ||
                this.x < 0 || this.x > GAME_CONFIG.CANVAS_WIDTH ||
                this.y < 0 || this.y > GAME_CONFIG.CANVAS_HEIGHT;
     }
@@ -1649,10 +1651,12 @@ function updateBots(now) {
         const cx = me.x + size / 2, cy = me.y + size / 2;
 
         // 朝路点移动（复用 Player.move，与真人一样受碰撞约束和速度限制）
+        // 感染者移速 +25%（猎杀压迫感）
+        const spd = (matchConfig.infectMode && me.team === 1) ? speed * 1.25 : speed;
         const wdx = bot.waypointX - cx, wdy = bot.waypointY - cy;
         const wd = Math.hypot(wdx, wdy);
         if (wd > 8) {
-            me.move((wdx / wd) * speed, (wdy / wd) * speed);
+            me.move((wdx / wd) * spd, (wdy / wd) * spd);
         }
 
         // 卡住检测：一段时间没挪动就换随机路点
@@ -1781,10 +1785,10 @@ function broadcast(message, excludeId = null, priority = 1) {
         sendToClients(binaryData, excludeId, priority, message.type);
         return;
     }
-    
+
     // 对于JSON消息，使用现有逻辑
     const optimizedMessage = optimizeMessage(message);
-    
+
     // 根据优先级决定是否立即发送还是批处理
     if (priority >= 3 || message.type === 'playerHit' || message.type === 'meleeAttack') {
         // 高优先级消息立即发送
@@ -1820,7 +1824,7 @@ function sendToClients(data, excludeId, priority = 1, messageType = null) {
         if (client.isOpen && client.playerId !== excludeId) {
             const clientPing = gameState.clientPing.get(client.playerId) || 50;
             const networkQuality = gameState.clientNetworkQuality.get(client.playerId) || 'good';
-            
+
             // 首次进入必须先收到一次GAME_STATE快照，否则跳过增量/全量更新
             if ((messageType === 'gameUpdate' || messageType === 'incrementalUpdate') && !client.hasInitialSnapshot) {
                 return;
@@ -1831,7 +1835,7 @@ function sendToClients(data, excludeId, priority = 1, messageType = null) {
                 // 弱网环境下跳过低优先级消息
                 return;
             }
-            
+
             try {
                 client.send(data);
                 // 如果是GAME_STATE，标记该客户端已经拿到初始快照
@@ -1853,17 +1857,17 @@ function addToBatchQueue(message, excludeId, priority) {
             if (!gameState.messageQueue.has(playerId)) {
                 gameState.messageQueue.set(playerId, []);
             }
-            
+
             const queue = gameState.messageQueue.get(playerId);
             queue.push({ message, priority, timestamp: Date.now() });
-            
+
             // 限制队列大小，防止内存泄漏
             if (queue.length > 50) {
                 queue.shift(); // 移除最旧的消息
             }
         }
     });
-    
+
     // 启动批处理定时器
     startBatchTimer();
 }
@@ -1871,7 +1875,7 @@ function addToBatchQueue(message, excludeId, priority) {
 // 启动批处理定时器
 function startBatchTimer() {
     if (gameState.batchTimer) return;
-    
+
     gameState.batchTimer = setTimeout(() => {
         processBatchQueue();
         gameState.batchTimer = null;
@@ -1881,19 +1885,19 @@ function startBatchTimer() {
 // 处理批处理队列
 function processBatchQueue() {
     const now = Date.now();
-    
+
     gameState.messageQueue.forEach((queue, playerId) => {
         if (queue.length === 0) return;
-        
+
         const client = Array.from(connections).find(c => c.playerId === playerId);
         if (!client || !client.isOpen) {
             gameState.messageQueue.delete(playerId);
             return;
         }
-        
+
         const networkQuality = gameState.clientNetworkQuality.get(playerId) || 'good';
         const clientPing = gameState.clientPing.get(playerId) || 50;
-        
+
         // 根据网络质量决定批处理大小
         let batchSize;
         if (networkQuality === 'poor') {
@@ -1903,10 +1907,10 @@ function processBatchQueue() {
         } else {
             batchSize = Math.min(15, queue.length); // 好网络最多15个消息
         }
-        
+
         // 提取要发送的消息
         const batch = queue.splice(0, batchSize);
-        
+
         if (batch.length === 1) {
             // 单条消息直接发送
             const data = compressMessage(batch[0].message);
@@ -1922,7 +1926,7 @@ function processBatchQueue() {
                 messages: batch.map(item => item.message),
                 timestamp: now
             };
-            
+
             const data = compressMessage(batchMessage);
             try {
                 client.send(data);
@@ -1931,7 +1935,7 @@ function processBatchQueue() {
             }
         }
     });
-    
+
     gameState.lastBatchTime = now;
 }
 
@@ -1945,7 +1949,7 @@ function compressMessage(message) {
 function hasPlayerChanged(playerId, currentPlayer) {
     const lastState = gameState.lastPlayerStates.get(playerId);
     if (!lastState) return true;
-    
+
     return (
         Math.abs(currentPlayer.x - lastState.x) > 0.5 ||
         Math.abs(currentPlayer.y - lastState.y) > 0.5 ||
@@ -1966,7 +1970,7 @@ function hasPlayerChanged(playerId, currentPlayer) {
 function hasBulletChanged(bulletId, currentBullet) {
     const lastState = gameState.lastBulletStates.find(b => b.id === bulletId);
     if (!lastState) return true;
-    
+
     return (
         Math.abs(currentBullet.x - lastState.x) > 0.5 ||
         Math.abs(currentBullet.y - lastState.y) > 0.5 ||
@@ -1979,7 +1983,7 @@ function hasBulletChanged(bulletId, currentBullet) {
 function hasPowerupChanged(powerupId, currentPowerup) {
     const lastState = gameState.lastPowerupStates.find(p => p.id === powerupId);
     if (!lastState) return true;
-    
+
     return (
         currentPowerup.x !== lastState.x ||
         currentPowerup.y !== lastState.y ||
@@ -1991,15 +1995,15 @@ function hasPowerupChanged(powerupId, currentPowerup) {
 function generateIncrementalUpdate() {
     const currentTime = Date.now();
     const players = getPlayersWithBuffs();
-    
+
     // 智能更新频率控制 - 保证同步优先
     const averagePing = Array.from(gameState.clientPing.values()).reduce((a, b) => a + b, 0) / gameState.clientPing.size || 50;
     const playerCount = gameState.players.size;
     const poorNetworkCount = Array.from(gameState.clientNetworkQuality.values()).filter(q => q === 'poor').length;
-    
+
     // 强制同步检查 - 每5秒强制发送完整状态确保同步
     const shouldForceBroadcast = (currentTime - (gameState.lastForceBroadcast || 0)) > 5000;
-    
+
     // 根据网络质量和玩家数量动态调整更新频率 - 提高同步频率
     let updateInterval;
     if (poorNetworkCount > playerCount * 0.5) {
@@ -2015,18 +2019,18 @@ function generateIncrementalUpdate() {
     } else {
         updateInterval = 3; // 低延迟少玩家：3次更新一次完整状态
     }
-    
+
     // 检查玩家变化 - 激进优化，最小化数据传输
     const changedPlayers = [];
     const newPlayers = [];
-    
+
     players.forEach(player => {
         if (hasPlayerChanged(player.id, player)) {
             if (gameState.lastPlayerStates.has(player.id)) {
                 // 只发送关键变化 - 更严格的阈值
                 const lastState = gameState.lastPlayerStates.get(player.id);
                 const changes = { id: player.id }; // 始终包含id
-                
+
                 // 位置变化 - 1像素精度，降低量化抖动
                 if (Math.abs(player.x - lastState.x) > 0.5) {
                     changes.x = Math.round(player.x);
@@ -2034,17 +2038,17 @@ function generateIncrementalUpdate() {
                 if (Math.abs(player.y - lastState.y) > 0.5) {
                     changes.y = Math.round(player.y);
                 }
-                
+
                 // 角度变化
                 if (Math.abs(player.angle - lastState.angle) > 0.02) {
                     changes.angle = Math.round(player.angle * 100) / 100;
                 }
-                
+
                 // 非位置属性
                 if (player.health !== lastState.health) changes.health = player.health;
                 if (player.score !== lastState.score) changes.score = player.score;
                 if (player.isAlive !== lastState.isAlive) changes.isAlive = player.isAlive;
-                
+
                 // 检查powerups变化
                 const powerupsChanged = JSON.stringify(player.powerups) !== JSON.stringify(lastState.powerups);
                 if (powerupsChanged) changes.powerups = player.powerups;
@@ -2100,11 +2104,11 @@ function generateIncrementalUpdate() {
             });
         }
     });
-    
+
     // 子弹更新 - 激进优化，只发送必要的子弹数据
     const newBullets = [];
     const removedBullets = [];
-    
+
     // 检测新子弹 - 添加详细调试日志
     console.log(`当前子弹数量: ${gameState.bullets.length}, 上次记录的子弹数量: ${gameState.lastBulletStates.length}`);
     gameState.bullets.forEach(bullet => {
@@ -2123,25 +2127,25 @@ function generateIncrementalUpdate() {
             console.log(`新子弹已加入newBullets数组，当前数组长度: ${newBullets.length}`);
         }
     });
-    
+
     // 检测移除的子弹
     gameState.lastBulletStates.forEach(lastBullet => {
         if (!gameState.bullets.find(b => b.id === lastBullet.id)) {
             removedBullets.push(lastBullet.id);
         }
     });
-    
+
     // 更新子弹最后状态 - 只保存必要信息
     gameState.lastBulletStates = gameState.bullets.map(bullet => ({
         id: bullet.id,
         x: bullet.x,
         y: bullet.y
     }));
-    
+
     // 道具更新 - 只发送新道具和移除的道具
     const newPowerups = [];
     const removedPowerups = [];
-    
+
     // 检测新道具
     gameState.powerups.forEach(powerup => {
         if (!gameState.lastPowerupStates.find(p => p.id === powerup.id)) {
@@ -2153,14 +2157,14 @@ function generateIncrementalUpdate() {
             });
         }
     });
-    
+
     // 检测移除的道具
     gameState.lastPowerupStates.forEach(lastPowerup => {
         if (!gameState.powerups.find(p => p.id === lastPowerup.id)) {
             removedPowerups.push(lastPowerup.id);
         }
     });
-    
+
     // 更新道具最后状态
     gameState.lastPowerupStates = gameState.powerups.map(powerup => ({
         id: powerup.id,
@@ -2168,15 +2172,15 @@ function generateIncrementalUpdate() {
         y: powerup.y,
         type: powerup.type
     }));
-    
+
     // 决定是否发送完整更新 - 添加强制同步检查
     const shouldSendFullUpdate = gameState.updateCounter % updateInterval === 0 || shouldForceBroadcast;
-    
+
     // 更新强制广播时间戳
     if (shouldForceBroadcast) {
         gameState.lastForceBroadcast = currentTime;
     }
-    
+
     if (shouldSendFullUpdate) {
         const update = {
             type: 'gameUpdate',
@@ -2213,12 +2217,12 @@ function generateIncrementalUpdate() {
             remainingTime: Math.max(0, gameState.gameDuration - (currentTime - gameState.gameStartTime)),
             isGameEnded: gameState.isGameEnded
         };
-        
+
         // 地形数据发送频率提高保证同步
         if (gameState.updateCounter % 60 === 0 || gameState.updateCounter === 1) {
             update.terrain = gameState.terrain;
         }
-        
+
         return update;
     } else {
         // 增量更新 - 激进优化，只在有实际变化时发送
@@ -2228,7 +2232,7 @@ function generateIncrementalUpdate() {
             remainingTime: Math.max(0, gameState.gameDuration - (currentTime - gameState.gameStartTime)), // 始终包含剩余时间
             isGameEnded: gameState.isGameEnded
         };
-        
+
         // 只添加有数据的字段
         if (newPlayers.length > 0) update.newPlayers = newPlayers;
         if (changedPlayers.length > 0) update.changedPlayers = changedPlayers;
@@ -2236,14 +2240,14 @@ function generateIncrementalUpdate() {
         if (removedBullets.length > 0) update.removedBullets = removedBullets;
         if (newPowerups.length > 0) update.newPowerups = newPowerups;
         if (removedPowerups.length > 0) update.removedPowerups = removedPowerups;
-        
+
         // 始终发送增量更新（因为包含剩余时间需要持续更新）
-        
+
         // 调试日志：检查子弹更新
         if (newBullets.length > 0 || removedBullets.length > 0) {
             console.log(`增量更新包含子弹: 新增${newBullets.length}个, 移除${removedBullets.length}个`);
         }
-        
+
         return update;
     }
 }
@@ -2255,7 +2259,7 @@ function optimizeMessage(message) {
         if (!message.fullUpdate) {
             return message;
         }
-        
+
         // 优化完整游戏更新数据包
         const optimized = {
             type: message.type,
@@ -2422,6 +2426,7 @@ function handleClientClose(ws) {
         console.log(`玩家 ${ws.playerId} 断开连接`);
         gameState.players.delete(ws.playerId);
         gameState.clientPing.delete(ws.playerId);
+        if (gameState.lastShootRequests) gameState.lastShootRequests.delete(ws.playerId);
         gameState.clientUpdateRates.delete(ws.playerId);
         gameState.messageQueue.delete(ws.playerId);
 
@@ -2463,7 +2468,7 @@ function handleMessage(ws, message) {
         case 'respawn':
             handleRespawn(ws, message);
             break;
-            
+
         case 'chatMessage':
             // 处理聊天消息
             const chatPlayer = gameState.players.get(ws.playerId);
@@ -2534,23 +2539,23 @@ function handleMessage(ws, message) {
                     content: message.content.trim().substring(0, 100), // 限制长度
                     timestamp: Date.now()
                 };
-                
+
                 console.log(`聊天消息: ${chatPlayer.nickname}: ${chatMessage.content}`);
-                
+
                 // 广播给所有玩家
                 broadcast(chatMessage);
             }
             break;
-            
+
         case 'ping':
             // 处理ping检测和网络质量分析 - 增强版
             const serverTime = Date.now();
             const clientPing = serverTime - message.timestamp;
-            
+
             // 更新客户端ping记录和网络质量评估
             if (ws.playerId) {
                 gameState.clientPing.set(ws.playerId, clientPing);
-                
+
                 // 评估网络质量
                 let networkQuality;
                 if (clientPing < 50) {
@@ -2562,20 +2567,20 @@ function handleMessage(ws, message) {
                 } else {
                     networkQuality = 'poor';
                 }
-                
+
                 gameState.clientNetworkQuality.set(ws.playerId, networkQuality);
-                
+
                 // 计算客户端更新率
                 const lastPingTime = ws.lastPingTime || serverTime;
                 const pingInterval = serverTime - lastPingTime;
                 ws.lastPingTime = serverTime;
-                
+
                 if (pingInterval > 0) {
                     const updateRate = 1000 / pingInterval;
                     gameState.clientUpdateRates.set(ws.playerId, updateRate);
                 }
             }
-            
+
             const pongMessage = {
                 type: 'pong',
                 timestamp: message.timestamp,
@@ -2611,14 +2616,14 @@ function handleJoin(ws, message) {
 
     gameState.players.set(playerId, player);
     ws.playerId = playerId;
-    
+
     // 发送玩家ID和配置（二进制）
     try {
         ws.send(encodeJoined(playerId));
     } catch (e) {
         console.error('发送JOINED失败:', e);
     }
-    
+
     // 广播新玩家加入
     const joinWs = weaponNetState(player);
     broadcast({
@@ -2641,7 +2646,7 @@ function handleJoin(ws, message) {
             grenades: joinWs.g
         }
     }, playerId);
-    
+
     // 发送当前游戏完整状态（二进制）
     try {
         ws.send(encodeInitialGameState(gameState));
@@ -2650,7 +2655,7 @@ function handleJoin(ws, message) {
     } catch (e) {
         console.error('发送初始游戏状态失败:', e);
     }
-    
+
     console.log(`玩家 ${nickname} (ID: ${playerId}) 加入游戏`);
 }
 
@@ -2658,13 +2663,13 @@ function handleJoin(ws, message) {
 function handleMove(ws, message) {
     const player = gameState.players.get(ws.playerId);
     if (!player || !player.isAlive) return;
-    
+
     const { x, y, angle } = message;
-    
+
     // 计算移动距离
     const dx = x - player.x;
     const dy = y - player.y;
-    
+
     // 使用新的move方法，包含碰撞检测
     player.move(dx, dy);
     player.angle = angle;
@@ -2678,9 +2683,9 @@ function handleShoot(ws, message) {
         console.log('射击失败: 玩家不存在或已死亡', ws.playerId);
         return;
     }
-    
+
     const { targetX, targetY } = message;
-    
+
     // 服务器端防重复射击检查（轻量去重，避免网络抖动导致的重复帧）
     const now = Date.now();
     if (!gameState.lastShootRequests) {
@@ -2693,9 +2698,9 @@ function handleShoot(ws, message) {
         return;
     }
     gameState.lastShootRequests.set(ws.playerId, now);
-    
+
     console.log(`玩家 ${player.nickname} 射击到 (${targetX}, ${targetY})`);
-    
+
     const bullets = player.shoot(targetX, targetY);
 
     if (bullets && bullets.length) {
@@ -2712,10 +2717,10 @@ function handleMelee(ws, message) {
         console.log('近战攻击失败: 玩家不存在或已死亡', ws.playerId);
         return;
     }
-    
+
     const { targetX, targetY } = message;
     console.log(`玩家 ${player.nickname} 近战攻击到 (${targetX}, ${targetY})`);
-    
+
     const success = player.meleeAttack(targetX, targetY);
     if (!success) {
         console.log('近战攻击失败: 可能还在冷却中或超出范围');
@@ -2726,9 +2731,9 @@ function handleMelee(ws, message) {
 function handleRespawn(ws, message) {
     const player = gameState.players.get(ws.playerId);
     if (!player || player.isAlive) return;
-    
+
     player.respawn();
-    
+
     // 广播复活信息
     broadcast({
         type: 'playerRespawn',
@@ -2943,16 +2948,16 @@ function spawnPowerup() {
         const buffs = [POWERUP_TYPES.SHIELD, POWERUP_TYPES.RAPID_FIRE, POWERUP_TYPES.DAMAGE_BOOST, POWERUP_TYPES.HEAL, POWERUP_TYPES.GRENADE_PACK];
         type = buffs[Math.floor(Math.random() * buffs.length)];
     }
-    
+
     // 尝试多次生成道具，确保不在地形内
     let attempts = 0;
     let x, y;
     let validPosition = false;
-    
+
     while (attempts < 50 && !validPosition) {
         x = Math.random() * (GAME_CONFIG.CANVAS_WIDTH - GAME_CONFIG.POWERUP_SIZE);
         y = Math.random() * (GAME_CONFIG.CANVAS_HEIGHT - GAME_CONFIG.POWERUP_SIZE);
-        
+
         // 检查是否与地形碰撞（四周留 20px 空隙，避免贴墙难拾取）
         if (!checkTerrainCollision(x - 20, y - 20, GAME_CONFIG.POWERUP_SIZE + 40, GAME_CONFIG.POWERUP_SIZE + 40)) {
             // 检查是否与玩家碰撞
@@ -2976,24 +2981,24 @@ function spawnPowerup() {
                     }
                 }
             });
-            
+
             if (!playerCollision) {
                 validPosition = true;
             }
         }
-        
+
         attempts++;
     }
-    
+
     // 如果找不到合适位置，就不生成道具
     if (!validPosition) {
         console.log('无法找到合适的道具生成位置');
         return;
     }
-    
+
     const powerup = new Powerup(gameState.nextPowerupId++, type, x, y);
     gameState.powerups.push(powerup);
-    
+
     // 广播新道具生成
     broadcast({
         type: 'powerupSpawned',
@@ -3012,7 +3017,7 @@ function spawnPowerup() {
 function checkPowerupPickup() {
     gameState.powerups = gameState.powerups.filter(powerup => {
         let pickedUp = false;
-        
+
         gameState.players.forEach(player => {
             if (player.isAlive && !pickedUp) {
                 const powerupRect = {
@@ -3021,19 +3026,19 @@ function checkPowerupPickup() {
                     width: GAME_CONFIG.POWERUP_SIZE,
                     height: GAME_CONFIG.POWERUP_SIZE
                 };
-                
+
                 const playerRect = {
                     x: player.x,
                     y: player.y,
                     width: GAME_CONFIG.PLAYER_SIZE,
                     height: GAME_CONFIG.PLAYER_SIZE
                 };
-                
+
                 if (checkCollision(powerupRect, playerRect)) {
                     // 应用道具效果
                     const now = Date.now();
                     const duration = GAME_CONFIG.POWERUP_DURATION;
-                    
+
                     const weaponId = powerupWeapon(powerup.type);
                     if (weaponId) {
                         player.equipWeapon(weaponId);
@@ -3056,7 +3061,7 @@ function checkPowerupPickup() {
                                 break;
                         }
                     }
-                    
+
                     // 广播道具拾取
                     broadcast({
                         type: 'powerupPickedUp',
@@ -3064,12 +3069,12 @@ function checkPowerupPickup() {
                         playerId: player.id,
                         powerupType: powerup.type
                     });
-                    
+
                     pickedUp = true;
                 }
             }
         });
-        
+
         return !pickedUp;
     });
 }
@@ -3090,6 +3095,7 @@ function infectPlayer(player, byName) {
     player.team = 1;
     applyInfectColor(player);
     player.equipWeapon('rifle');
+    if (player.isAlive) player.health = 180; // 感染即强化（复活时同样为180）
     const survivors = Array.from(gameState.players.values()).filter(p => p.team === 2).length;
     broadcast({
         type: 'chatMessage',
@@ -3350,7 +3356,7 @@ function endGame() {
     gameState.showingResults = true;
     gameState.countdown = 5; // 5秒结果展示
     gameState.countdownStartTime = Date.now();
-    
+
     // 获取最终排行榜
     const finalPlayers = getPlayersList();
 
@@ -3447,21 +3453,21 @@ function resetGameState() {
         player.isAlive = true;
         player.respawnTime = 0;
         player.respawn();
-        
+
         // 清除所有道具效果
         Object.keys(player.powerups).forEach(key => {
             player.powerups[key].active = false;
             player.powerups[key].endTime = 0;
         });
     });
-    
+
     // 清空子弹和击杀记录
     gameState.bullets = [];
     gameState.killFeed = [];
-    
+
     // 重新生成道具
     gameState.powerups = [];
-    
+
     console.log('游戏状态重置完成');
 }
 
@@ -3473,11 +3479,11 @@ function updateGameCountdown() {
         const elapsedTime = currentTime - gameState.countdownStartTime;
         const totalCountdownSeconds = gameState.showingResults ? 5 : 3; // 根据阶段确定总倒计时秒数
         const remainingSeconds = Math.max(0, Math.ceil(totalCountdownSeconds - (elapsedTime / 1000)));
-        
+
         // 更新倒计时显示
         if (remainingSeconds !== gameState.countdown) {
             gameState.countdown = remainingSeconds;
-            
+
             // 广播倒计时更新给所有客户端
             if (gameState.showingResults) {
                 // 游戏结束倒计时更新
@@ -3500,7 +3506,7 @@ function updateGameCountdown() {
             }
             console.log(`倒计时更新: ${gameState.countdown}秒 (${gameState.showingResults ? '结果展示' : '新游戏开始'})`);
         }
-        
+
         if (gameState.countdown <= 0) {
             if (gameState.showingResults) {
                 // 排行榜展示时间结束，开始新游戏倒计时
@@ -3508,7 +3514,7 @@ function updateGameCountdown() {
                 gameState.showingResults = false;
                 gameState.countdown = 3; // 3秒新游戏开始倒计时
                 gameState.countdownStartTime = Date.now();
-                
+
                 // 广播新游戏开始倒计时
                 console.log('发送 newGameStart 消息，倒计时:', gameState.countdown);
                 broadcast({
@@ -3522,10 +3528,10 @@ function updateGameCountdown() {
                 // 新游戏倒计时结束，正式开始游戏
                 console.log('新游戏倒计时结束，正式开始游戏');
                 gameState.isGameEnded = false;
-                
+
                 // 重置游戏状态
                 resetGameState();
-                
+
                 // 广播游戏正式开始
                 console.log('发送 gameStarted 消息');
                 broadcast({
@@ -3540,7 +3546,7 @@ function updateGameCountdown() {
             }
         }
     }
-    
+
 }
 
 // 游戏逻辑和网络推送分离
@@ -3575,7 +3581,7 @@ function updateGameLogic() {
     // 检查游戏时间
     if (!gameState.isGameEnded && gameState.gameStartTime) {
         const remainingTime = gameState.gameDuration - (now - gameState.gameStartTime);
-        
+
         if (remainingTime <= 0) {
             console.log('游戏时间结束，触发endGame()');
             endGame();
@@ -3587,20 +3593,20 @@ function updateGameLogic() {
     if (matchConfig.infectMode && !gameState.isGameEnded) {
         updateInfectMode();
     }
-    
+
     // 计算delta时间
     const currentTime = Date.now();
     const playerDeltaTime = gameState.lastUpdateTime ? currentTime - gameState.lastUpdateTime : gameLogicInterval;
     gameState.lastUpdateTime = currentTime;
-    
+
     // 更新玩家
     gameState.players.forEach(player => {
         player.update(playerDeltaTime);
     });
-    
+
     // 更新AI机器人
     updateBots(currentTime);
-    
+
     // 更新子弹
     gameState.bullets = gameState.bullets.filter(bullet => {
         bullet.update(playerDeltaTime);
@@ -3613,10 +3619,10 @@ function updateGameLogic() {
         // 子弹物理更新（碰撞检测等）
         return processBulletCollisions(bullet);
     });
-    
+
     // 检查道具拾取
     checkPowerupPickup();
-    
+
     // 更新游戏倒计时
     updateGameCountdown();
 }
@@ -3625,7 +3631,7 @@ function updateGameLogic() {
 function broadcastGameState() {
     // 结果展示阶段不推送位置状态，减少无意义数据
     if (gameState.showingResults) return;
-    
+
     // 生成更新（增量或完整）
     const update = generateIncrementalUpdate();
     if (update && update.type === 'incrementalUpdate') {
@@ -3641,16 +3647,16 @@ function adaptiveGameLoop() {
     const now = Date.now();
     frameCount++;
     adaptiveCounter++;
-    
+
     // 每5秒检查一次性能
     if (now - lastPerformanceCheck > 5000) {
         const averagePing = Array.from(gameState.clientPing.values()).reduce((a, b) => a + b, 0) / gameState.clientPing.size || 50;
         const playerCount = gameState.players.size;
         const poorNetworkCount = Array.from(gameState.clientNetworkQuality.values()).filter(q => q === 'poor').length;
-        
+
         // 游戏逻辑保持60FPS稳定
         gameLogicInterval = 16;
-        
+
         // 根据网络状况调整推送频率
         if (poorNetworkCount > playerCount * 0.5) {
             networkUpdateInterval = 25; // 40FPS for poor network
@@ -3659,13 +3665,13 @@ function adaptiveGameLoop() {
         } else {
             networkUpdateInterval = 16; // 60FPS for good network
         }
-        
+
         console.log(`游戏逻辑: ${Math.round(1000/gameLogicInterval)}FPS, 网络推送: ${Math.round(1000/networkUpdateInterval)}FPS (Ping: ${Math.round(averagePing)}ms, 玩家: ${playerCount})`);
-        
+
         lastPerformanceCheck = now;
         frameCount = 0;
     }
-    
+
     // 继续循环
     setTimeout(adaptiveGameLoop, Math.min(gameLogicInterval, networkUpdateInterval));
 }
@@ -3674,13 +3680,13 @@ function adaptiveGameLoop() {
 function startGameSystems() {
     // 游戏逻辑循环 - 固定30FPS
     setInterval(updateGameLogic, gameLogicInterval);
-    
+
     // 自适应网络推送循环 - 使用setTimeout以便动态调整
     (function networkLoop() {
         broadcastGameState();
         setTimeout(networkLoop, networkUpdateInterval);
     })();
-    
+
     // 性能监控和自适应调整（会动态更新networkUpdateInterval）
     adaptiveGameLoop();
 }
