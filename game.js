@@ -1192,7 +1192,7 @@ class GameClient {
     joinGame() {
         const nickname = document.getElementById('nicknameInput').value.trim();
         if (!nickname) {
-            window.showToast('请先输入昵称', 'warn');
+            window.showToast(I18N.t('g.needNick'), 'warn');
             document.getElementById('nicknameInput').focus();
             return;
         }
@@ -1283,12 +1283,12 @@ class GameClient {
         this.ws.onclose = () => {
             console.log('与服务器断开连接');
             if (this.pingTimer) clearInterval(this.pingTimer);
-            window.showToast('与服务器断开连接，请刷新页面重试', 'error', 8000);
+            window.showToast(I18N.t('g.disconnected'), 'error', 8000);
         };
 
         this.ws.onerror = (error) => {
             console.error('WebSocket错误:', error);
-            window.showToast('连接服务器失败，请确保服务器正在运行', 'error');
+            window.showToast(I18N.t('g.connectFail'), 'error');
         };
     }
 
@@ -1324,7 +1324,7 @@ class GameClient {
             if (playerId === this.playerId) msg.classList.add('mine');
             const sender = document.createElement('span');
             sender.className = 'sender';
-            sender.textContent = playerName || '玩家';
+            sender.textContent = playerName || I18N.t('g.player');
             const p = this.players.get(playerId);
             if (p && p.color) sender.style.color = p.color;
             const bubble = document.createElement('div');
@@ -1337,6 +1337,19 @@ class GameClient {
         while (container.children.length > 60) container.removeChild(container.firstChild);
         // 滚动到底部
         container.scrollTop = container.scrollHeight;
+    }
+
+    // 系统消息按本地语言渲染（sysKey 来自主机广播，中文 content 仅作兜底）
+    renderSysMessage(key, params) {
+        const p = Object.assign({}, params || {});
+        if (p.mapId) p.map = I18N.t('map.' + p.mapId);
+        if (p.weaponId) p.weapon = I18N.t('weapon.' + p.weaponId);
+        if (p.modeId) p.mode = I18N.t('mode.' + p.modeId);
+        if (p.teamId) p.team = I18N.t(p.teamId === 1 ? 'team.red' : 'team.blue');
+        if (Array.isArray(p.mapIds)) p.list = p.mapIds.map(id => `${id}=${I18N.t('map.' + id)}`).join(', ');
+        if (Array.isArray(p.weaponIds)) p.list = p.weaponIds.map(id => `${id}=${I18N.t('weapon.' + id)}`).join(', ');
+        if (Array.isArray(p.names)) p.names = p.names.join(I18N.lang === 'en' ? ', ' : '、');
+        return I18N.t('sys.' + key, p);
     }
 
     // 角色头顶聊天气泡（画布绘制，天然免疫 XSS）
@@ -1417,22 +1430,27 @@ class GameClient {
         switch (message.type) {
             // ...
 
-            case 'chatMessage':
-                this.addChatMessage(message.playerName, message.content, message.playerId);
+            case 'chatMessage': {
+                const displayContent = message.sysKey
+                    ? this.renderSysMessage(message.sysKey, message.sysParams)
+                    : message.content;
+                this.addChatMessage(message.playerName, displayContent, message.playerId);
                 this.setChatBubble(message.playerId, message.content);
                 break;
+            }
 
             case 'killstreak': {
-                const names = { 2: '双杀', 3: '三连杀', 4: '四连杀', 5: '五连杀' };
-                const label = message.streak <= 5 ? names[message.streak] : `超神·${message.streak}连杀`;
+                const label = message.streak <= 5
+                    ? I18N.t('streak.' + message.streak)
+                    : I18N.t('streak.n', { n: message.streak });
                 const mine = message.playerId === this.playerId;
-                this.showStreakBanner(`${message.name} ${label}！`, message.streak >= 5 ? 'god' : mine ? 'mine' : '');
+                this.showStreakBanner(`${message.name} ${label}!`, message.streak >= 5 ? 'god' : mine ? 'mine' : '');
                 if (window.gameSound) window.gameSound.streak(Math.min(6, message.streak));
                 break;
             }
 
             case 'streakEnd':
-                this.showStreakBanner(`${message.by} 终结了 ${message.name} 的 ${message.streak} 连杀`, 'end');
+                this.showStreakBanner(I18N.t('streak.end', { by: message.by, name: message.name, n: message.streak }), 'end');
                 if (window.gameSound) window.gameSound.streakEnd();
                 break;
 
@@ -1940,7 +1958,15 @@ class GameClient {
                 const playerId = decoder.readUint32();
                 const playerName = decoder.readString();
                 const content = decoder.readString();
-                this.addChatMessage(playerName, content, playerId);
+                const sysKey = decoder.readString();
+                const sysParamsRaw = decoder.readString();
+                let displayContent = content;
+                if (sysKey) {
+                    let sysParams = null;
+                    try { sysParams = sysParamsRaw ? JSON.parse(sysParamsRaw) : null; } catch (e) { /* 解析失败走中文兜底 */ }
+                    displayContent = this.renderSysMessage(sysKey, sysParams);
+                }
+                this.addChatMessage(playerName, displayContent, playerId);
                 this.setChatBubble(playerId, content);
                 return;
             }
@@ -2019,8 +2045,9 @@ class GameClient {
                 const killer = decoder.readString();
                 const victim = decoder.readString();
                 const weapon = decoder.readString();
+                const wid = decoder.readString();
                 const timestamp = decoder.readUint32();
-                this.updateKillFeed({ killer, victim, weapon, timestamp });
+                this.updateKillFeed({ killer, victim, weapon, wid, timestamp });
                 return;
             }
 
@@ -2148,8 +2175,8 @@ class GameClient {
         const title = document.getElementById('deathTitle');
         if (title) {
             title.textContent = this.deathInfo.killerName
-                ? `被 ${this.deathInfo.killerName} 击败了`
-                : '你被击败了';
+                ? I18N.t('hud.deathBy', { name: this.deathInfo.killerName })
+                : I18N.t('hud.deathTitle');
         }
         const cd = document.getElementById('deathCountdown');
         if (cd) {
@@ -2185,20 +2212,20 @@ class GameClient {
         this._lastAmmoSig = sig;
         // 机甲：无限弹药 + 火箭
         if (me.weapon === 5) {
-            nameEl.textContent = '机甲';
+            nameEl.textContent = I18N.t('weapon.mech');
             magEl.textContent = '∞';
             resEl.textContent = '';
             const tk5 = document.getElementById('reloadTrack');
             if (tk5) tk5.classList.add('hidden');
             const gz5 = document.getElementById('grenadeCount');
-            if (gz5) gz5.textContent = '火箭 ∞';
+            if (gz5) gz5.textContent = I18N.t('hud.rocketInf');
             return;
         }
 
         // 感染者：显示利爪，无弹药/手雷概念
         if (this.gameConfig && this.gameConfig.GAME_MODE === 'infect' && me.team === 1) {
-            nameEl.textContent = '感染者';
-            magEl.textContent = '利爪';
+            nameEl.textContent = I18N.t('team.infected');
+            magEl.textContent = I18N.t('weapon.claw');
             resEl.textContent = '';
             const tk = document.getElementById('reloadTrack');
             if (tk) tk.classList.add('hidden');
@@ -2211,7 +2238,7 @@ class GameClient {
         const now = Date.now();
         const reloading = !!(me.reloadEnd && me.reloadEnd > now);
 
-        nameEl.textContent = reloading ? '换弹中' : (conf.name || '步枪');
+        nameEl.textContent = reloading ? I18N.t('hud.reloading') : I18N.t('weapon.' + this.weaponIdName(me.weapon || 0));
         magEl.textContent = me.mag !== undefined ? me.mag : (conf.magSize || 30);
         resEl.textContent = '/ ' + ((me.reserve === undefined || me.reserve === 255) ? '∞' : me.reserve);
 
@@ -2238,14 +2265,16 @@ class GameClient {
     // 道具箱内容的中文名（拾取揭示用）
     powerupName(type) {
         switch (type) {
-            case 'shield': return '护盾';
-            case 'rapid_fire': return '急速射击';
-            case 'damage_boost': return '伤害强化';
-            case 'heal': return '满血恢复';
-            case 'weapon_smg': return '冲锋枪';
-            case 'weapon_shotgun': return '霰弹枪';
-            case 'weapon_sniper': return '狙击枪';
-            default: return '道具';
+            case 'shield': return I18N.t('pickup.shield');
+            case 'rapid_fire': return I18N.t('pickup.rapid');
+            case 'damage_boost': return I18N.t('pickup.damage');
+            case 'heal': return I18N.t('pickup.heal');
+            case 'weapon_smg': return I18N.t('weapon.smg');
+            case 'weapon_shotgun': return I18N.t('weapon.shotgun');
+            case 'weapon_sniper': return I18N.t('weapon.sniper');
+            case 'weapon_rpg': return I18N.t('weapon.rpg');
+            case 'grenade_pack': return I18N.t('hud.grenade');
+            default: return I18N.t('pickup.item');
         }
     }
 
@@ -2464,11 +2493,11 @@ class GameClient {
             // 分队计分板：分组显示，组头显示团队总分（感染模式用感染者/幸存者标签）
             const isInfect = this.gameConfig && this.gameConfig.GAME_MODE === 'infect';
             (isInfect ? [
-                { team: 1, name: '感染者', color: '#2ecc71' },
-                { team: 2, name: '幸存者', color: '#3498db' }
+                { team: 1, name: I18N.t('team.infected'), color: '#2ecc71' },
+                { team: 2, name: I18N.t('team.survivor'), color: '#3498db' }
             ] : [
-                { team: 1, name: '红队', color: '#e74c3c' },
-                { team: 2, name: '蓝队', color: '#3498db' }
+                { team: 1, name: I18N.t('team.red'), color: '#e74c3c' },
+                { team: 2, name: I18N.t('team.blue'), color: '#3498db' }
             ]).forEach(meta => {
                 const members = allPlayers
                     .filter(p => p.team === meta.team)
@@ -2501,9 +2530,11 @@ class GameClient {
     updateMatchInfo() {
         const el = document.getElementById('matchInfo');
         if (!el || !this.gameConfig) return;
-        const mapName = this.gameConfig.MAP_NAME || '经典竞技场';
-        const mode = this.gameConfig.GAME_MODE === 'infect' ? '感染模式'
-            : this.gameConfig.TEAM_MODE ? '红蓝对抗' : '个人混战';
+        const mapName = this.gameConfig.MAP_ID
+            ? I18N.t('map.' + this.gameConfig.MAP_ID)
+            : (this.gameConfig.MAP_NAME || I18N.t('map.classic'));
+        const mode = I18N.t('mode.' + (this.gameConfig.GAME_MODE === 'infect' ? 'infect'
+            : this.gameConfig.TEAM_MODE ? 'team' : 'ffa'));
         el.textContent = `${mapName} · ${mode}`;
     }
 
@@ -2542,7 +2573,8 @@ class GameClient {
         killNotification.dataset.killId = killInfo.timestamp.toString();
 
         // 根据武器类型选择强调色
-        const weaponColor = killInfo.weapon === '近战' ? '#f87171' : '#fbbf24';
+        const isMeleeKill = killInfo.wid === 'melee' || killInfo.wid === 'claw' || killInfo.weapon === '近战' || killInfo.weapon === '刀了';
+        const weaponColor = isMeleeKill ? '#f87171' : '#fbbf24';
 
         // 昵称是用户输入，必须用 textContent 防 XSS
         const killerSpan = document.createElement('span');
@@ -2551,7 +2583,7 @@ class GameClient {
         const weaponSpan = document.createElement('span');
         weaponSpan.className = 'weapon';
         weaponSpan.style.color = weaponColor;
-        weaponSpan.textContent = killInfo.weapon;
+        weaponSpan.textContent = killInfo.wid ? I18N.t('kf.' + killInfo.wid) : killInfo.weapon;
         const victimSpan = document.createElement('span');
         victimSpan.className = 'victim';
         victimSpan.textContent = killInfo.victim;
@@ -2615,13 +2647,13 @@ class GameClient {
             });
             let title, titleColor;
             if (totals[1] === totals[2]) {
-                title = '平局';
+                title = I18N.t('res.draw');
                 titleColor = '#f1c40f';
             } else if (totals[1] > totals[2]) {
-                title = '红队获胜';
+                title = I18N.t('res.redWin');
                 titleColor = '#e74c3c';
             } else {
-                title = '蓝队获胜';
+                title = I18N.t('res.blueWin');
                 titleColor = '#3498db';
             }
             const banner = document.createElement('div');
@@ -2629,9 +2661,9 @@ class GameClient {
             banner.innerHTML = `
                 <div class="team-result-title" style="color: ${titleColor}">${title}</div>
                 <div class="team-result-score">
-                    <span style="color: #e74c3c">红队 ${totals[1]}</span>
+                    <span style="color: #e74c3c">${I18N.t('team.red')} ${totals[1]}</span>
                     <span class="team-result-vs">:</span>
-                    <span style="color: #3498db">${totals[2]} 蓝队</span>
+                    <span style="color: #3498db">${totals[2]} ${I18N.t('team.blue')}</span>
                 </div>
             `;
             finalScores.appendChild(banner);
@@ -2648,7 +2680,7 @@ class GameClient {
             if (teamColor) nameSpan.style.color = teamColor;
             nameSpan.textContent = `${index + 1}. ${player.nickname}`;
             const ptsSpan = document.createElement('span');
-            ptsSpan.textContent = `${player.score} 分`;
+            ptsSpan.textContent = I18N.t('hud.pts', { n: player.score });
             scoreItem.append(nameSpan, ptsSpan);
             finalScores.appendChild(scoreItem);
         });
@@ -2801,7 +2833,7 @@ class GameClient {
         // 按类别配色
         const isWeapon = typeof powerup.type === 'string' && powerup.type.startsWith('weapon_');
         const P = isWeapon
-            ? { ring: '#fbbf24', side: '#3d3325', topA: '#8a6f3d', topB: '#5d4a29', lid: 'rgba(251, 191, 36, 0.65)', corner: '#c9a75c', glyph: '#ffe9b3', mark: '武' }
+            ? { ring: '#fbbf24', side: '#3d3325', topA: '#8a6f3d', topB: '#5d4a29', lid: 'rgba(251, 191, 36, 0.65)', corner: '#c9a75c', glyph: '#ffe9b3', mark: I18N.t('crate.weaponMark') }
             : { ring: '#4dd0e1', side: '#1f3d44', topA: '#3f7d8c', topB: '#295660', lid: 'rgba(77, 208, 225, 0.65)', corner: '#7fd3e0', glyph: '#d9f6fb', mark: '+' };
 
         ctx.save();
@@ -3359,12 +3391,12 @@ class GameClient {
         }
         if (qualityEl) {
             const q = (this.networkQuality || '').toLowerCase();
-            let text = '良好';
+            let text = I18N.t('net.good');
             let cls = 'network-quality ';
-            if (q === 'excellent') { text = '优秀'; cls += 'quality-excellent'; }
-            else if (q === 'good') { text = '良好'; cls += 'quality-good'; }
-            else if (q === 'medium') { text = '一般'; cls += 'quality-medium'; }
-            else if (q === 'poor') { text = '较差'; cls += 'quality-poor'; }
+            if (q === 'excellent') { text = I18N.t('net.excellent'); cls += 'quality-excellent'; }
+            else if (q === 'good') { text = I18N.t('net.good'); cls += 'quality-good'; }
+            else if (q === 'medium') { text = I18N.t('net.fair'); cls += 'quality-medium'; }
+            else if (q === 'poor') { text = I18N.t('net.poor'); cls += 'quality-poor'; }
             else { cls += 'quality-good'; }
             qualityEl.className = cls;
             qualityEl.textContent = text;
@@ -3800,7 +3832,7 @@ class GameClient {
         ctx.textAlign = 'center';
         ctx.fillStyle = '#7ee0ff';
         ctx.globalAlpha = 0.6 + Math.sin(time * 0.005) * 0.3;
-        ctx.fillText('空投机甲 · 靠近驾驶', m.x, m.y - s * 0.72);
+        ctx.fillText(I18N.t('hud.mechHint'), m.x, m.y - s * 0.72);
         ctx.restore();
     }
 
@@ -4506,7 +4538,7 @@ class GameClient {
             if (remainingTime > 0) {
                 activePowerups.push({
                     key: 'shield',
-                    name: '护盾',
+                    name: I18N.t('buff.shield'),
                     icon: '◆',
                     color: '#9b59b6',
                     remainingTime: remainingTime
@@ -4519,7 +4551,7 @@ class GameClient {
             if (remainingTime > 0) {
                 activePowerups.push({
                     key: 'rapidFire',
-                    name: '快速射击',
+                    name: I18N.t('buff.rapid'),
                     icon: '▲',
                     color: '#e67e22',
                     remainingTime: remainingTime
@@ -4532,7 +4564,7 @@ class GameClient {
             if (remainingTime > 0) {
                 activePowerups.push({
                     key: 'damageBoost',
-                    name: '伤害提升',
+                    name: I18N.t('buff.damage'),
                     icon: '●',
                     color: '#e74c3c',
                     remainingTime: remainingTime
@@ -4545,7 +4577,7 @@ class GameClient {
             if (remainingTime > 0) {
                 activePowerups.push({
                     key: 'heal',
-                    name: '回血',
+                    name: I18N.t('buff.heal'),
                     icon: '+',
                     color: '#27ae60',
                     remainingTime: remainingTime

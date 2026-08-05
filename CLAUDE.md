@@ -22,6 +22,14 @@ CUBEFIRE·立方火线：多人局域网2.5D俯视角射击游戏，支持两种
 - `lan.js` - 房间码信令（PeerJS）、选举制房间列表（玩家页面竞争认领`cubefire-v1-lobby`固定ID兼任目录节点，房主心跳注册、访客轮询拉取、目录死亡自动补位）、WebRTC手动信令（邀请码/应答码）、传输层封装（本地回环/DataChannel）和大厅UI逻辑
 - `game.js` - 客户端游戏逻辑，包含粒子系统、特效、渲染和输入处理；通过`window.createGameTransport`工厂选择传输方式，未设置时回退WebSocket
 - `index.html` - 游戏主页面，包含完整的用户界面、样式和联机大厅
+- `i18n.js` - 多语言支持（中/英/日），最先加载。`I18N.t(key, params)`取文案；HTML静态文本用`data-i18n`/`data-i18n-html`/`data-i18n-ph`/`data-i18n-title`标注由`I18N.apply()`套用；语言存`localStorage('cubefire-lang')`，默认按浏览器语言检测，着陆页右上角切换（切换即刷新页面）
+
+### 多语言（i18n）
+- 中文是源语言：HTML/JS里保留中文原文作兜底，非中文语言由`i18n.js`词典覆盖；新增用户可见文案必须同步添加zh/en/ja三份词条
+- 主机广播的系统消息不能直接发翻译文本（各玩家语言不同）：`sysChat(content, sysKey, sysParams)`同时携带中文兜底与语义key，客户端`renderSysMessage`按本地语言渲染；params中`mapId/weaponId/modeId/teamId/mapIds/weaponIds/names`会被自动翻译展开
+- killFeed同理：`killInfo.wid`（rifle/smg/.../melee/claw/grenade/rpg/mechRocket/barrel/mechBlast）供客户端查`kf.*`词条，`weapon`中文名仅兜底
+- 二进制协议：chatMessage尾部追加sysKey字符串+sysParams JSON字符串；killFeed在weapon后追加wid字符串（改动时三个文件需同步）
+- 机器人昵称按房主语言生成（`BOT_NAMES_BY_LANG`，浏览器主机取`I18N.lang`，Node服务器取`LANG_ID`环境变量）；地图/武器/模式名一律客户端按id翻译，房间列表目录数据带`mapId`
 
 ### 架构模式
 - **客户端-服务器架构**：服务器管理游戏状态，客户端负责渲染和输入

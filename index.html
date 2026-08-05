@@ -245,6 +245,25 @@
             letter-spacing: 0.5px;
         }
 
+        .lang-switch {
+            display: inline-flex;
+            border: 2px solid var(--line, #2b3350);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .lang-switch button {
+            border: none;
+            background: transparent;
+            color: var(--ink-dim, #8b93ad);
+            font: inherit;
+            font-size: 12px;
+            font-weight: 700;
+            padding: 4px 10px;
+            cursor: pointer;
+        }
+        .lang-switch button + button { border-left: 2px solid var(--line, #2b3350); }
+        .lang-switch button:hover { color: var(--ink, #e8ecf8); }
+        .lang-switch button.active { background: var(--line, #2b3350); color: var(--ink, #e8ecf8); }
         .topbar-actions {
             display: flex;
             align-items: center;
@@ -272,10 +291,15 @@
             margin: clamp(10px, 2.5vh, 28px) 0 clamp(12px, 2.5vh, 26px);
         }
 
+        html:lang(ja) .hero-title {
+            font-size: clamp(26px, 4.6vh, 48px);
+            letter-spacing: 5px;
+        }
         .hero-title {
             font-size: clamp(36px, 6.5vh, 68px);
             font-weight: 900;
             letter-spacing: 10px;
+            white-space: nowrap;
             line-height: 1.1;
             color: #eaf6ff;
             /* 2.5D 挤出效果：逐层加深的立体侧面 + 落影 + 霓虹光 */
@@ -2012,64 +2036,64 @@
 
         <!-- 死亡反馈 -->
         <div id="deathOverlay" class="hidden">
-            <div id="deathTitle">你被击败了</div>
-            <div id="deathSub">复活倒计时 <span id="deathCountdown">3</span></div>
+            <div id="deathTitle" data-i18n="hud.deathTitle">你被击败了</div>
+            <div id="deathSub"><span data-i18n="hud.deathSub">复活倒计时</span> <span id="deathCountdown">3</span></div>
         </div>
 
         <!-- 触屏控件（触屏设备进入游戏后显示） -->
         <div id="touchControls" class="hidden">
             <div id="joyBase"><div id="joyKnob"></div></div>
             <div class="touch-btns">
-                <button id="tbMelee" class="touch-btn">刀</button>
-                <button id="tbGrenade" class="touch-btn">雷</button>
-                <button id="tbReload" class="touch-btn">弹</button>
+                <button id="tbMelee" class="touch-btn" data-i18n="tb.melee">刀</button>
+                <button id="tbGrenade" class="touch-btn" data-i18n="tb.grenade">雷</button>
+                <button id="tbReload" class="touch-btn" data-i18n="tb.reload">弹</button>
             </div>
         </div>
 
         <!-- 竖屏提示 -->
         <div id="rotateHint">
-            <div class="rotate-box">请把手机横过来<span>横屏体验更好</span></div>
+            <div class="rotate-box" data-i18n-html="lp.rotate">请把手机横过来<span>横屏体验更好</span></div>
         </div>
 
         <!-- 计时器：顶部居中 -->
         <div id="gameTimer">
-            <div id="timerLabel">剩余时间</div>
+            <div id="timerLabel" data-i18n="hud.time">剩余时间</div>
             <div id="timerValue">120s</div>
         </div>
 
         <!-- 房主：邀请玩家浮动按钮与面板（左上） -->
-        <button id="inviteToggle" class="hidden">对战设置</button>
+        <button id="inviteToggle" class="hidden" data-i18n="hp.settings">对战设置</button>
         <div id="invitePanel" class="hidden">
-            <h3>对战设置</h3>
+            <h3 data-i18n="hp.settings">对战设置</h3>
             <div class="bot-row">
-                <span class="bot-label">AI 机器人</span>
+                <span class="bot-label" data-i18n="hp.bots">AI 机器人</span>
                 <div class="bot-stepper">
-                    <button id="botMinus" title="减少机器人">−</button>
+                    <button id="botMinus" title="减少机器人" data-i18n-title="hp.botMinus">−</button>
                     <span id="botCountLabel">0</span>
-                    <button id="botPlus" title="增加机器人">+</button>
+                    <button id="botPlus" title="增加机器人" data-i18n-title="hp.botPlus">+</button>
                 </div>
             </div>
             <div class="panel-divider"></div>
-            <p class="panel-tip">邀请真人玩家：把房间码告诉朋友，输码直接加入</p>
+            <p class="panel-tip" data-i18n="hp.shareTip">邀请真人玩家：把房间码告诉朋友，输码直接加入</p>
             <div id="roomCodeDisplay">——</div>
-            <button id="copyRoomCodeButton" class="btn ghost">复制房间码</button>
+            <button id="copyRoomCodeButton" class="btn ghost" data-i18n="hp.copyCode">复制房间码</button>
             <p id="roomServiceStatus" class="panel-tip"></p>
-            <button id="manualInviteToggle" class="fallback-toggle">纯离线局域网？使用手动邀请码连接</button>
+            <button id="manualInviteToggle" class="fallback-toggle" data-i18n="lp.manualToggle">纯离线局域网？使用手动邀请码连接</button>
             <div id="manualInviteArea" class="hidden">
-                <p class="panel-tip">每位新玩家需要一份新的邀请码（一次邀请一人）</p>
-                <button id="genInviteButton" class="btn">生成邀请码</button>
+                <p class="panel-tip" data-i18n="hp.oneEach">每位新玩家需要一份新的邀请码（一次邀请一人）</p>
+                <button id="genInviteButton" class="btn" data-i18n="hp.genInvite">生成邀请码</button>
                 <div id="inviteExchange" class="hidden">
-                    <div class="panel-step"><span class="step-badge">1</span><span>把<b>邀请码</b>发给对方</span></div>
+                    <div class="panel-step"><span class="step-badge">1</span><span data-i18n-html="hp.step1">把<b>邀请码</b>发给对方</span></div>
                     <textarea id="inviteCodeOutput" readonly rows="3"></textarea>
-                    <button id="copyInviteButton" class="btn ghost">复制邀请码</button>
-                    <div class="panel-step"><span class="step-badge">2</span><span>把对方回传的<b>应答码</b>粘贴到下面</span></div>
-                    <textarea id="answerCodeInput" placeholder="粘贴应答码..." rows="3"></textarea>
-                    <button id="confirmAnswerButton" class="btn">确认连接</button>
+                    <button id="copyInviteButton" class="btn ghost" data-i18n="hp.copyInvite">复制邀请码</button>
+                    <div class="panel-step"><span class="step-badge">2</span><span data-i18n-html="hp.step2">把对方回传的<b>应答码</b>粘贴到下面</span></div>
+                    <textarea id="answerCodeInput" placeholder="粘贴应答码..." data-i18n-ph="hp.answerPh" rows="3"></textarea>
+                    <button id="confirmAnswerButton" class="btn" data-i18n="hp.confirm">确认连接</button>
                 </div>
                 <p id="inviteStatus" class="panel-status"></p>
             </div>
             <p id="inviteCount" class="panel-tip"></p>
-            <button id="closeInviteButton" class="btn ghost">关闭</button>
+            <button id="closeInviteButton" class="btn ghost" data-i18n="hp.close">关闭</button>
         </div>
 
         <!-- 击杀信息（左上，位于邀请按钮下方） -->
@@ -2078,24 +2102,24 @@
         <!-- 右侧信息栏：排行榜 / 聊天室 / 网络状态 -->
         <aside id="hudRight">
             <div id="scoreboard" class="hud-panel hidden">
-                <h3>排行榜</h3>
+                <h3 data-i18n="hud.leaderboard">排行榜</h3>
                 <div id="matchInfo"></div>
                 <div id="playersList"></div>
             </div>
 
             <div id="chatroom" class="hud-panel hidden">
-                <div class="chat-header">聊天室</div>
+                <div class="chat-header" data-i18n="hud.chat">聊天室</div>
                 <div class="chat-messages" id="chatMessages"></div>
                 <div class="emoji-bar" id="emojiBar"></div>
                 <div class="chat-input-container">
-                    <input type="text" id="chatInput" placeholder="输入消息，/bot 3 召唤机器人" maxlength="100">
-                    <button id="chatSend">发送</button>
+                    <input type="text" id="chatInput" placeholder="输入消息，/bot 3 召唤机器人" data-i18n-ph="hud.chatPh" maxlength="100">
+                    <button id="chatSend" data-i18n="hud.send">发送</button>
                 </div>
             </div>
 
             <div id="networkStatus" class="hud-panel hidden">
                 <div id="pingDisplay" class="ping-display good">--ms</div>
-                <div id="networkQuality" class="network-quality quality-good">良好</div>
+                <div id="networkQuality" class="network-quality quality-good" data-i18n="net.good">良好</div>
                 <div id="fpsDisplay" class="network-quality">FPS: --</div>
                 <div id="rateDisplay" class="network-quality">↓ 0 pkt/s · ↑ 0 pkt/s</div>
             </div>
@@ -2104,39 +2128,39 @@
         <!-- 底部 HUD：生命值(左) / 操作提示(中) / 弹药(右)，宽度对齐画布 -->
         <div id="ui" class="hidden">
             <div class="hud-block">
-                <div class="stat-label">生命值</div>
+                <div class="stat-label" data-i18n="hud.health">生命值</div>
                 <div class="health-row">
                     <span class="stat-num" id="health">100</span>
                     <div class="health-track"><div class="health-fill" id="healthFill" style="width: 100%"></div></div>
                 </div>
-                <div class="score-line">得分 <span id="score">0</span></div>
+                <div class="score-line"><span data-i18n="hud.score">得分</span> <span id="score">0</span></div>
             </div>
 
-            <div id="instructions" class="hidden">
+            <div id="instructions" class="hidden" data-i18n-html="hud.hint">
                 <span class="keycap">WASD</span> 移动&nbsp;&nbsp;<span class="keycap">左键</span> 射击&nbsp;&nbsp;<span class="keycap">右键</span> 近战&nbsp;&nbsp;<span class="keycap">R</span> 换弹&nbsp;&nbsp;<span class="keycap">G</span> 手雷&nbsp;&nbsp;<span class="keycap">空格</span> 复活&nbsp;&nbsp;<span class="keycap">M</span> 静音
             </div>
 
             <div class="hud-block hud-right">
-                <div class="stat-label" id="weaponName">步枪</div>
+                <div class="stat-label" id="weaponName" data-i18n="weapon.rifle">步枪</div>
                 <div class="ammo-row">
                     <span class="stat-num" id="ammoMag">30</span>
                     <span class="ammo-reserve" id="ammoReserve">/ ∞</span>
                 </div>
                 <div class="reload-track hidden" id="reloadTrack"><div class="reload-fill" id="reloadFill"></div></div>
-                <div class="grenade-line">手雷 <span id="grenadeCount">×2</span></div>
+                <div class="grenade-line"><span data-i18n="hud.grenade">手雷</span> <span id="grenadeCount">×2</span></div>
             </div>
         </div>
 
         <!-- 游戏结束公告 -->
         <div id="gameEndModal" class="hidden">
             <div id="gameEndContent">
-                <h2 id="gameEndTitle">游戏结束</h2>
+                <h2 id="gameEndTitle" data-i18n="hud.gameEnd">游戏结束</h2>
                 <div id="finalScoreboard">
-                    <h3>最终排行榜</h3>
+                    <h3 data-i18n="hud.finalBoard">最终排行榜</h3>
                     <div id="finalScores"></div>
                 </div>
                 <div id="countdown">
-                    <h3>下一局开始倒计时</h3>
+                    <h3 data-i18n="hud.nextIn">下一局开始倒计时</h3>
                     <div id="countdownValue">3</div>
                 </div>
             </div>
@@ -2145,9 +2169,9 @@
         <!-- 新游戏开始公告 -->
         <div id="newGameModal" class="hidden">
             <div id="newGameContent">
-                <h2 id="newGameTitle">新游戏开始</h2>
+                <h2 id="newGameTitle" data-i18n="hud.newGame">新游戏开始</h2>
                 <div id="newGameCountdown">
-                    <h3>游戏开始倒计时</h3>
+                    <h3 data-i18n="hud.startIn">游戏开始倒计时</h3>
                     <div id="newGameCountdownValue">3</div>
                 </div>
             </div>
@@ -2164,117 +2188,122 @@
                 <div class="landing-topbar">
                     <div class="brand">
                         <div class="brand-mark"><svg width="20" height="20" viewBox="0 0 24 24"><path d="M12 2.5 20.5 7.25 12 12 3.5 7.25z" fill="#7dd3fc"/><path d="M3.5 7.25 12 12v9.5L3.5 16.75z" fill="#0ea5e9"/><path d="M20.5 7.25 12 12v9.5l8.5-4.75z" fill="#075985"/></svg></div>
-                        <div class="brand-name">立方火线<em>CUBEFIRE</em></div>
+                        <div class="brand-name" data-i18n-html="lp.brand">立方火线<em>CUBEFIRE</em></div>
                     </div>
                     <div class="topbar-actions">
-                        <button id="soundToggle" class="topbar-tag" title="开关音效与背景音乐（快捷键 M）">声音 开</button>
-                        <div class="topbar-tag">无服务器 · 浏览器直连</div>
+                        <div class="lang-switch">
+                            <button data-lang="zh">中</button>
+                            <button data-lang="en">EN</button>
+                            <button data-lang="ja">日</button>
+                        </div>
+                        <button id="soundToggle" class="topbar-tag" title="开关音效与背景音乐（快捷键 M）" data-i18n-title="lp.soundTitle" data-i18n="lp.soundOn">声音 开</button>
+                        <div class="topbar-tag" data-i18n="lp.tagline">无服务器 · 浏览器直连</div>
                     </div>
                 </div>
 
                 <div class="landing-main">
                 <div class="landing-hero">
-                    <h1 class="hero-title">立方火线</h1>
-                    <p class="hero-sub">不服来战 · 多人局域网 2.5D 射击竞技场</p>
-                    <p class="hero-features">射击 · 近战 · 道具增益 · AI 机器人 · P2P 直连</p>
+                    <h1 class="hero-title" data-i18n="lp.heroTitle">立方火线</h1>
+                    <p class="hero-sub" data-i18n="lp.heroSub">不服来战 · 多人局域网 2.5D 射击竞技场</p>
+                    <p class="hero-features" data-i18n="lp.heroFeatures">射击 · 近战 · 道具增益 · AI 机器人 · P2P 直连</p>
                 </div>
 
                 <div id="loginForm">
-                    <label class="field-label" for="nicknameInput">玩家昵称</label>
-                    <input type="text" id="nicknameInput" placeholder="输入你的昵称，准备开战" maxlength="15">
+                    <label class="field-label" for="nicknameInput" data-i18n="lp.nickLabel">玩家昵称</label>
+                    <input type="text" id="nicknameInput" placeholder="输入你的昵称，准备开战" data-i18n-ph="lp.nickPh" maxlength="15">
 
                     <div id="hostOptions">
                         <div class="host-option">
-                            <label class="field-label" for="mapSelect">地图</label>
+                            <label class="field-label" for="mapSelect" data-i18n="lp.mapLabel">地图</label>
                             <select id="mapSelect"></select>
                         </div>
                         <div class="host-option">
-                            <label class="field-label" for="teamModeSelect">对战模式</label>
+                            <label class="field-label" for="teamModeSelect" data-i18n="lp.modeLabel">对战模式</label>
                             <select id="teamModeSelect">
-                                <option value="ffa">个人混战</option>
-                                <option value="team">红蓝对抗</option>
-                                <option value="infect">感染模式</option>
+                                <option value="ffa" data-i18n="mode.ffa">个人混战</option>
+                                <option value="team" data-i18n="mode.team">红蓝对抗</option>
+                                <option value="infect" data-i18n="mode.infect">感染模式</option>
                             </select>
                         </div>
                         <div class="host-option">
-                            <label class="field-label" for="roomVisibilitySelect">房间列表</label>
+                            <label class="field-label" for="roomVisibilitySelect" data-i18n="lp.visLabel">房间列表</label>
                             <select id="roomVisibilitySelect">
-                                <option value="public">公开 · 列表可见</option>
-                                <option value="private">私密 · 仅凭码</option>
+                                <option value="public" data-i18n="lp.visPublic">公开 · 列表可见</option>
+                                <option value="private" data-i18n="lp.visPrivate">私密 · 仅凭码</option>
                             </select>
                         </div>
-                        <p class="host-option-hint">创建房间时生效；对局中可用 /map、/team 指令调整下一局</p>
+                        <p class="host-option-hint" data-i18n="lp.hostHint">创建房间时生效；对局中可用 /map、/team 指令调整下一局</p>
                     </div>
 
                     <div id="modeButtons">
                         <button id="quickPlayButton" class="mode-card primary">
                             <span class="mode-info">
-                                <span class="mode-title">快速开战 <em>推荐</em></span>
-                                <span class="mode-desc">自动加入人最多的公开房间，没有就开新房带机器人</span>
+                                <span class="mode-title"><span data-i18n="lp.quick">快速开战</span> <em data-i18n="lp.quickBadge">推荐</em></span>
+                                <span class="mode-desc" data-i18n="lp.quickDesc">自动加入人最多的公开房间，没有就开新房带机器人</span>
                             </span>
                         </button>
                         <button id="createRoomButton" class="mode-card">
                             <span class="mode-info">
-                                <span class="mode-title">创建房间</span>
-                                <span class="mode-desc">我当房主，浏览器直接开局，无需任何服务器</span>
+                                <span class="mode-title" data-i18n="lp.create">创建房间</span>
+                                <span class="mode-desc" data-i18n="lp.createDesc">我当房主，浏览器直接开局，无需任何服务器</span>
                             </span>
                         </button>
                         <button id="joinRoomButton" class="mode-card">
                             <span class="mode-info">
-                                <span class="mode-title">加入房间</span>
-                                <span class="mode-desc">输入房主的 6 位房间码，直连进入对局</span>
+                                <span class="mode-title" data-i18n="lp.join">加入房间</span>
+                                <span class="mode-desc" data-i18n="lp.joinDesc">输入房主的 6 位房间码，直连进入对局</span>
                             </span>
                         </button>
                         <button id="joinButton" class="mode-card">
                             <span class="mode-info">
-                                <span class="mode-title">连接服务器</span>
-                                <span class="mode-desc">经典模式，连接 WebSocket 游戏服务器</span>
+                                <span class="mode-title" data-i18n="lp.server">连接服务器</span>
+                                <span class="mode-desc" data-i18n="lp.serverDesc">经典模式，连接 WebSocket 游戏服务器</span>
                             </span>
                         </button>
-                        <p id="serverModeHint" class="mode-hint">局域网房间由房主浏览器运行游戏逻辑，玩家之间 P2P 直连</p>
+                        <p id="serverModeHint" class="mode-hint" data-i18n="lp.serverHint">局域网房间由房主浏览器运行游戏逻辑，玩家之间 P2P 直连</p>
                     </div>
 
                     <div id="guestPanel" class="hidden">
-                        <div class="panel-step"><span class="step-badge">1</span><span>从<b>房间列表</b>选一个加入，或输入 <b>6 位房间码</b></span></div>
-                        <div id="roomList" class="room-list"><div class="room-list-empty">正在获取房间列表...</div></div>
+                        <div class="panel-step"><span class="step-badge">1</span><span data-i18n-html="lp.joinStep1">从<b>房间列表</b>选一个加入，或输入 <b>6 位房间码</b></span></div>
+                        <div id="roomList" class="room-list"><div class="room-list-empty" data-i18n="lp.roomListLoading">正在获取房间列表...</div></div>
                         <div class="room-list-bar">
                             <span id="recentRooms" class="recent-rooms"></span>
-                            <button id="refreshRoomsButton" class="room-refresh">刷新列表</button>
+                            <button id="refreshRoomsButton" class="room-refresh" data-i18n="lp.refresh">刷新列表</button>
                         </div>
                         <div class="room-code-row">
-                            <input id="roomCodeInput" maxlength="6" placeholder="房间码" autocomplete="off" spellcheck="false">
-                            <button id="joinByCodeButton" class="btn">加入</button>
+                            <input id="roomCodeInput" maxlength="6" placeholder="房间码" data-i18n-ph="lp.codePh" autocomplete="off" spellcheck="false">
+                            <button id="joinByCodeButton" class="btn" data-i18n="lp.joinBtn">加入</button>
                         </div>
                         <p id="guestStatus" class="panel-status"></p>
-                        <button id="manualJoinToggle" class="fallback-toggle">纯离线局域网？使用手动邀请码连接</button>
+                        <button id="manualJoinToggle" class="fallback-toggle" data-i18n="lp.manualToggle">纯离线局域网？使用手动邀请码连接</button>
                         <div id="manualJoinArea" class="hidden">
-                            <div class="panel-step"><span class="step-badge">1</span><span>把房主发给你的<b>邀请码</b>粘贴到下面</span></div>
-                            <textarea id="inviteCodeInput" placeholder="粘贴邀请码..." rows="3"></textarea>
-                            <button id="genAnswerButton" class="btn">生成应答码</button>
+                            <div class="panel-step"><span class="step-badge">1</span><span data-i18n-html="lp.guestStep1">把房主发给你的<b>邀请码</b>粘贴到下面</span></div>
+                            <textarea id="inviteCodeInput" placeholder="粘贴邀请码..." data-i18n-ph="lp.invitePh" rows="3"></textarea>
+                            <button id="genAnswerButton" class="btn" data-i18n="lp.genAnswer">生成应答码</button>
                             <div id="guestAnswerArea" class="hidden">
-                                <div class="panel-step"><span class="step-badge">2</span><span>把下面的<b>应答码</b>发回给房主，等待确认</span></div>
+                                <div class="panel-step"><span class="step-badge">2</span><span data-i18n-html="lp.guestStep2">把下面的<b>应答码</b>发回给房主，等待确认</span></div>
                                 <textarea id="answerCodeOutput" readonly rows="3"></textarea>
-                                <button id="copyAnswerButton" class="btn ghost">复制应答码</button>
+                                <button id="copyAnswerButton" class="btn ghost" data-i18n="lp.copyAnswer">复制应答码</button>
                             </div>
                         </div>
-                        <button id="guestBackButton" class="btn ghost">← 返回模式选择</button>
+                        <button id="guestBackButton" class="btn ghost" data-i18n="lp.back">← 返回模式选择</button>
                     </div>
                 </div>
                 </div>
 
                 <div class="landing-controls">
-                    <span class="control-item"><span class="keycap">W A S D</span> 移动</span>
-                    <span class="control-item"><span class="keycap">鼠标</span> 瞄准</span>
-                    <span class="control-item"><span class="keycap">左键</span> 射击</span>
-                    <span class="control-item"><span class="keycap">右键</span> 近战</span>
-                    <span class="control-item"><span class="keycap">R</span> 换弹</span>
-                    <span class="control-item"><span class="keycap">G</span> 手雷</span>
-                    <span class="control-item"><span class="keycap">空格</span> 复活</span>
-                    <span class="control-item"><span class="keycap">M</span> 静音</span>
+                    <span class="control-item"><span class="keycap">W A S D</span> <span data-i18n="ctl.move">移动</span></span>
+                    <span class="control-item"><span class="keycap" data-i18n="key.mouse">鼠标</span> <span data-i18n="ctl.aim">瞄准</span></span>
+                    <span class="control-item"><span class="keycap" data-i18n="key.lmb">左键</span> <span data-i18n="ctl.shoot">射击</span></span>
+                    <span class="control-item"><span class="keycap" data-i18n="key.rmb">右键</span> <span data-i18n="ctl.melee">近战</span></span>
+                    <span class="control-item"><span class="keycap">R</span> <span data-i18n="ctl.reload">换弹</span></span>
+                    <span class="control-item"><span class="keycap">G</span> <span data-i18n="ctl.grenade">手雷</span></span>
+                    <span class="control-item"><span class="keycap" data-i18n="key.space">空格</span> <span data-i18n="ctl.respawn">复活</span></span>
+                    <span class="control-item"><span class="keycap">M</span> <span data-i18n="ctl.mute">静音</span></span>
                 </div>
 
                 <div class="landing-footer">
-                    <b>CUBEFIRE · 立方火线</b> · 2 分钟一局 · 击杀 +100 分 命中 +10 分 · 支持局域网多人同屏对战 · <a class="footer-link" href="https://tanzhuo.xyz" target="_blank" rel="noopener">作者博客</a>
+                    <b data-i18n="lp.footerBrand">CUBEFIRE · 立方火线</b> · <span data-i18n="lp.footerInfo">2 分钟一局 · 击杀 +100 分 命中 +10 分 · 支持局域网多人同屏对战</span> · <a class="footer-link" href="https://tanzhuo.xyz" target="_blank" rel="noopener" data-i18n="lp.footerBlog">作者博客</a>
                 </div>
             </div>
         </div>
@@ -2306,6 +2335,7 @@
         setTimeout(remove, ttl);
     };
     </script>
+    <script src="i18n.js"></script>
     <script src="sound.js"></script>
     <script src="host-core.js"></script>
     <script src="game.js"></script>

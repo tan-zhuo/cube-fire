@@ -510,6 +510,8 @@ function encodeChatMessage(msg) {
     enc.writeUint32(msg.playerId || 0);
     enc.writeString(msg.playerName || '');
     enc.writeString(msg.content || '');
+    enc.writeString(msg.sysKey || '');
+    enc.writeString(msg.sysParams ? JSON.stringify(msg.sysParams) : '');
     return enc.getBuffer();
 }
 
@@ -548,6 +550,7 @@ function encodeKillFeedMsg(msg) {
     enc.writeString(msg.killInfo?.killer || '');
     enc.writeString(msg.killInfo?.victim || '');
     enc.writeString(msg.killInfo?.weapon || '');
+    enc.writeString(msg.killInfo?.wid || '');
     enc.writeUint32((msg.killInfo?.timestamp || Date.now()) >>> 0);
     return enc.getBuffer();
 }
@@ -1128,6 +1131,7 @@ class Player {
                 blastRadius: GRENADE.blastRadius,
                 blastDamage: GRENADE.blastDamage,
                 weaponName: '手雷',
+                wid: 'grenade',
                 originX: cx, originY: cy, throwDist
             }
         );
@@ -1236,7 +1240,7 @@ class Player {
                 this.id,
                 damage,
                 w.lifeMs,
-                w.kind ? { kind: w.kind, blastRadius: w.blastRadius, blastDamage: damage, weaponName: w.name } : undefined
+                w.kind ? { kind: w.kind, blastRadius: w.blastRadius, blastDamage: damage, weaponName: w.name, wid: this.weapon } : undefined
             ));
         }
 
@@ -1298,6 +1302,7 @@ class Player {
                     killer: this.nickname,
                     victim: hitPlayer.nickname,
                     weapon: '刀了',
+                    wid: (matchConfig.infectMode && this.team === 1) ? 'claw' : 'melee',
                     timestamp: Date.now()
                 };
                 gameState.killFeed.push(killInfo);
@@ -1363,6 +1368,7 @@ class Bullet {
             this.blastRadius = opts.blastRadius;
             this.blastDamage = opts.blastDamage;
             this.weaponName = opts.weaponName;
+            this.wid = opts.wid;
             this.originX = opts.originX;
             this.originY = opts.originY;
             this.throwDist = opts.throwDist;
@@ -1451,7 +1457,16 @@ function checkCollision(rect1, rect2) {
 
 // ===================== AI 机器人 =====================
 const BOT_LIMIT = 8;
-const BOT_NAMES = ['猎手', '疾风', '影子', '磐石', '夜枭', '闪电', '幽灵', '狂狼'];
+const BOT_NAMES_BY_LANG = {
+    zh: ['猎手', '疾风', '影子', '磐石', '夜枭', '闪电', '幽灵', '狂狼'],
+    en: ['Hunter', 'Gale', 'Shadow', 'Rock', 'Owl', 'Bolt', 'Ghost', 'Wolf'],
+    ja: ['ハンター', '疾風', 'シャドウ', '磐石', 'フクロウ', '稲妻', 'ゴースト', '狼'],
+};
+// 机器人名字跟随房主语言（浏览器主机取 I18N，Node 服务器取 LANG_ID 环境变量）
+const BOT_NAMES = BOT_NAMES_BY_LANG[
+    (typeof window !== 'undefined' && window.I18N) ? window.I18N.lang
+        : (typeof process !== 'undefined' && process.env && process.env.LANG_ID) || 'zh'
+] || BOT_NAMES_BY_LANG.zh;
 const bots = new Map(); // playerId -> 机器人状态
 
 function addBot() {
@@ -1839,6 +1854,11 @@ function encodeMessage(message) {
 }
 
 // 广播消息给所有客户端 - 优化版本支持批处理和压缩
+// 系统聊天广播：content 为中文兜底文案，sysKey/sysParams 供客户端按本地语言渲染
+function sysChat(content, sysKey, sysParams) {
+    broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, sysKey, sysParams, timestamp: Date.now() });
+}
+
 function broadcast(message, excludeId = null, priority = 1) {
     // 对于二进制消息，直接编码和发送
     if (shouldUseBinary(message.type)) {
@@ -2627,7 +2647,7 @@ function handleMessage(ws, message) {
                         cx + (dx / dist) * 26, cy + (dy / dist) * 26,
                         (dx / dist) * 8, (dy / dist) * 8,
                         gp.id, MECH.rocketDamage, 2200,
-                        { kind: 1, blastRadius: MECH.rocketRadius, blastDamage: MECH.rocketDamage, weaponName: '机甲火箭' }
+                        { kind: 1, blastRadius: MECH.rocketRadius, blastDamage: MECH.rocketDamage, weaponName: '机甲火箭', wid: 'mechRocket' }
                     ));
                 }
             } else if (gp) {
@@ -2653,76 +2673,69 @@ function handleMessage(ws, message) {
                     const arg = cmdText.slice(4).trim();
                     const n = arg === '' ? bots.size + 1 : parseInt(arg, 10);
                     const count = setBotCount(isNaN(n) ? bots.size : n);
-                    broadcast({
-                        type: 'chatMessage',
-                        playerId: 0,
-                        playerName: '系统',
-                        content: `机器人数量: ${count}/${BOT_LIMIT}（输入 /bot 数字 调整）`,
-                        timestamp: Date.now()
-                    });
+                    sysChat(`机器人数量: ${count}/${BOT_LIMIT}（输入 /bot 数字 调整）`, 'botCount', { n: count, limit: BOT_LIMIT });
                     break;
                 }
                 // 地图指令：/map 查看列表，/map 地图ID 下一局切换
                 if (cmdText.startsWith('/map')) {
                     const arg = cmdText.slice(4).trim();
-                    let content;
                     if (arg && MAPS[arg]) {
                         matchConfig.pendingMapId = arg;
-                        content = `下一局将切换到地图「${MAPS[arg].name}」`;
+                        sysChat(`下一局将切换到地图「${MAPS[arg].name}」`, 'mapNext', { mapId: arg });
                     } else {
                         const list = Object.keys(MAPS).map(k => `${k}=${MAPS[k].name}`).join('，');
-                        content = `当前地图: ${(MAPS[matchConfig.mapId] || MAPS[DEFAULT_MAP_ID]).name}。可用地图: ${list}。输入 /map 地图ID 下一局切换`;
+                        sysChat(
+                            `当前地图: ${(MAPS[matchConfig.mapId] || MAPS[DEFAULT_MAP_ID]).name}。可用地图: ${list}。输入 /map 地图ID 下一局切换`,
+                            'mapCurrent',
+                            { mapId: matchConfig.mapId, mapIds: Object.keys(MAPS) }
+                        );
                     }
-                    broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, timestamp: Date.now() });
                     break;
                 }
                 // 武器指令：/weapon 武器ID 立即换枪（娱乐/调试）
                 if (cmdText.startsWith('/weapon')) {
                     const arg = cmdText.slice(7).trim().toLowerCase();
-                    let content;
                     if (arg === 'mech') {
-                        content = '机甲只能通过直升机空投获取';
-                        broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, timestamp: Date.now() });
+                        sysChat('机甲只能通过直升机空投获取', 'mechOnlyDrop');
                         break;
                     }
                     if (WEAPONS[arg]) {
                         chatPlayer.equipWeapon(arg);
-                        content = `${chatPlayer.nickname} 换上了「${WEAPONS[arg].name}」`;
+                        sysChat(`${chatPlayer.nickname} 换上了「${WEAPONS[arg].name}」`, 'weaponSwitched', { name: chatPlayer.nickname, weaponId: arg });
                     } else {
                         const list = WEAPON_IDS.map(k => `${k}=${WEAPONS[k].name}`).join('，');
-                        content = `可用武器: ${list}。输入 /weapon 武器ID 切换`;
+                        sysChat(`可用武器: ${list}。输入 /weapon 武器ID 切换`, 'weaponList', { weaponIds: WEAPON_IDS.slice() });
                     }
-                    broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, timestamp: Date.now() });
                     break;
                 }
                 // 机甲指令：/mech 立即召唤直升机空投
                 if (cmdText === '/mech') {
                     let hasPilot = false;
                     gameState.players.forEach(p => { if (p.mech) hasPilot = true; });
-                    let content;
                     if (fieldMech || hasPilot) {
-                        content = '场上已有机甲，摧毁后才能再次空投';
+                        sysChat('场上已有机甲，摧毁后才能再次空投', 'mechAlready');
                     } else {
                         lastMechEvent = 0; // 下个 tick 立即触发空投
-                        content = '武装直升机正在赶来...';
+                        sysChat('武装直升机正在赶来...', 'heliComing');
                     }
-                    broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, timestamp: Date.now() });
                     break;
                 }
                 // 分队指令：/team on 开启红蓝对抗，/team off 恢复个人混战
                 if (cmdText.startsWith('/team')) {
                     const arg = cmdText.slice(5).trim().toLowerCase();
-                    let content;
                     if (arg === 'on' || arg === '开') {
                         matchConfig.pendingTeamMode = true;
-                        content = '下一局开启红蓝对抗模式';
+                        sysChat('下一局开启红蓝对抗模式', 'teamOnNext');
                     } else if (arg === 'off' || arg === '关') {
                         matchConfig.pendingTeamMode = false;
-                        content = '下一局恢复个人混战模式';
+                        sysChat('下一局恢复个人混战模式', 'teamOffNext');
                     } else {
-                        content = `当前模式: ${matchConfig.teamMode ? '红蓝对抗' : '个人混战'}。输入 /team on 或 /team off 下一局切换`;
+                        sysChat(
+                            `当前模式: ${matchConfig.teamMode ? '红蓝对抗' : '个人混战'}。输入 /team on 或 /team off 下一局切换`,
+                            'teamCurrent',
+                            { modeId: matchConfig.teamMode ? 'team' : 'ffa' }
+                        );
                     }
-                    broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, timestamp: Date.now() });
                     break;
                 }
                 const chatMessage = {
@@ -3307,10 +3320,7 @@ function mechTick(now) {
             entered.y = fieldMech.y - GAME_CONFIG.PLAYER_SIZE / 2;
             fieldMech = null;
             broadcast({ type: 'mechEnter', playerId: entered.id });
-            broadcast({
-                type: 'chatMessage', playerId: 0, playerName: '系统',
-                content: `${entered.nickname} 驾驶了机甲！火力全开`, timestamp: Date.now()
-            });
+            sysChat(`${entered.nickname} 驾驶了机甲！火力全开`, 'mechPiloted', { name: entered.nickname });
         }
         return;
     }
@@ -3328,10 +3338,7 @@ function mechTick(now) {
         if (gameState.isGameEnded) return;
         fieldMech = { id: Date.now(), x: dropX, y: dropY };
         broadcast({ type: 'mechSpawn', x: dropX, y: dropY });
-        broadcast({
-            type: 'chatMessage', playerId: 0, playerName: '系统',
-            content: '武装直升机空投了一台机甲！先到先得', timestamp: Date.now()
-        });
+        sysChat('武装直升机空投了一台机甲！先到先得', 'mechDropped');
     }, 2200);
 }
 
@@ -3341,12 +3348,9 @@ function destroyMechFor(player) {
     const cy = player.y + GAME_CONFIG.PLAYER_SIZE / 2;
     player.equipWeapon('rifle');
     broadcast({ type: 'mechDestroyed', x: cx, y: cy, playerId: player.id });
-    broadcast({
-        type: 'chatMessage', playerId: 0, playerName: '系统',
-        content: `${player.nickname} 的机甲被摧毁了！`, timestamp: Date.now()
-    });
+    sysChat(`${player.nickname} 的机甲被摧毁了！`, 'mechDestroyed', { name: player.nickname });
     // 机甲殉爆（不伤驾驶员）
-    explodeAt(cx, cy, 100, 70, player.id, '机甲殉爆');
+    explodeAt(cx, cy, 100, 70, player.id, '机甲殉爆', 'mechBlast');
 }
 
 // ===================== 感染模式 =====================
@@ -3367,15 +3371,11 @@ function infectPlayer(player, byName) {
     player.equipWeapon('rifle');
     if (player.isAlive) player.health = 180; // 感染即强化（复活时同样为180）
     const survivors = Array.from(gameState.players.values()).filter(p => p.team === 2).length;
-    broadcast({
-        type: 'chatMessage',
-        playerId: 0,
-        playerName: '系统',
-        content: byName
-            ? `${player.nickname} 被 ${byName} 感染了！剩余幸存者 ${survivors} 人`
-            : `${player.nickname} 成为了初始感染者！小心近战利爪`,
-        timestamp: Date.now()
-    });
+    if (byName) {
+        sysChat(`${player.nickname} 被 ${byName} 感染了！剩余幸存者 ${survivors} 人`, 'infected', { name: player.nickname, by: byName, survivors });
+    } else {
+        sysChat(`${player.nickname} 成为了初始感染者！小心近战利爪`, 'initialInfected', { name: player.nickname });
+    }
 }
 
 function updateInfectMode() {
@@ -3395,13 +3395,7 @@ function updateInfectMode() {
     }
     // 幸存者全灭：感染者胜，提前结束本局
     if (players.length >= 2 && !players.some(p => p.team === 2)) {
-        broadcast({
-            type: 'chatMessage',
-            playerId: 0,
-            playerName: '系统',
-            content: '全员感染！感染者阵营获胜',
-            timestamp: Date.now()
-        });
+        sysChat('全员感染！感染者阵营获胜', 'allInfected');
         endGame();
     }
 }
@@ -3436,7 +3430,7 @@ function registerKill(shooter, victim) {
 }
 
 // 对单个玩家结算伤害（含击杀计分与播报），供子弹直击与爆炸复用
-function applyDamageTo(player, damage, shooterId, weaponName) {
+function applyDamageTo(player, damage, shooterId, weaponName, wid) {
     const shooter = gameState.players.get(shooterId);
     const wasAlive = player.isAlive;
     player.takeDamage(damage);
@@ -3449,6 +3443,7 @@ function applyDamageTo(player, damage, shooterId, weaponName) {
                 killer: shooter.nickname,
                 victim: player.nickname,
                 weapon: weaponName,
+                wid: wid,
                 timestamp: Date.now()
             };
             gameState.killFeed.push(killInfo);
@@ -3468,7 +3463,7 @@ function applyDamageTo(player, damage, shooterId, weaponName) {
 }
 
 // 范围爆炸：按距离衰减伤害（中心全额→边缘35%），不伤及投掷者与队友
-function explodeAt(x, y, radius, damageBase, shooterId, weaponName) {
+function explodeAt(x, y, radius, damageBase, shooterId, weaponName, wid) {
     const shooter = gameState.players.get(shooterId);
     gameState.players.forEach(player => {
         if (player.id === shooterId || !player.isAlive || isSameTeam(player, shooter)) return;
@@ -3480,7 +3475,7 @@ function explodeAt(x, y, radius, damageBase, shooterId, weaponName) {
         if (shooter && shooter.powerups.damageBoost && shooter.powerups.damageBoost.active) {
             damage = Math.floor(damage * 1.5);
         }
-        applyDamageTo(player, damage, shooterId, weaponName);
+        applyDamageTo(player, damage, shooterId, weaponName, wid);
     });
     broadcast({ type: 'explosion', x: Math.round(x), y: Math.round(y), radius: Math.round(radius) });
     // 爆炸摧毁范围内的木箱/引爆油桶
@@ -3493,7 +3488,8 @@ function explodeBullet(bullet) {
         bullet.blastRadius || 90,
         bullet.blastDamage || bullet.damage || 80,
         bullet.ownerId,
-        bullet.weaponName || '火箭筒'
+        bullet.weaponName || '火箭筒',
+        bullet.wid || 'rpg'
     );
 }
 
@@ -3525,7 +3521,7 @@ function destroyTerrainInRadius(x, y, radius, shooterId) {
     // 油桶连锁爆炸（错峰引爆，层次感）
     hit.filter(b => b.type === 'barrel').forEach((b, i) => {
         setTimeout(() => {
-            explodeAt(b.x + b.width / 2, b.y + b.height / 2, 85, 70, shooterId, '油桶');
+            explodeAt(b.x + b.width / 2, b.y + b.height / 2, 85, 70, shooterId, '油桶', 'barrel');
         }, 130 + i * 110);
     });
 }
@@ -3539,7 +3535,7 @@ function detonateBarrelByBullet(block, shooterId) {
         breaks: [],
         barrels: [{ x: block.x + block.width / 2, y: block.y + block.height / 2 }]
     });
-    explodeAt(block.x + block.width / 2, block.y + block.height / 2, 85, 70, shooterId, '油桶');
+    explodeAt(block.x + block.width / 2, block.y + block.height / 2, 85, 70, shooterId, '油桶', 'barrel');
 }
 
 // 子弹碰撞处理函数
@@ -3619,7 +3615,7 @@ function processBulletCollisions(bullet) {
                 if (shooter && shooter.powerups.damageBoost && shooter.powerups.damageBoost.active) {
                     damage = Math.floor(damage * 1.5);
                 }
-                applyDamageTo(player, damage, bullet.ownerId, (WEAPONS[shooter && shooter.weapon] || WEAPONS.rifle).name);
+                applyDamageTo(player, damage, bullet.ownerId, (WEAPONS[shooter && shooter.weapon] || WEAPONS.rifle).name, (shooter && WEAPONS[shooter.weapon]) ? shooter.weapon : 'rifle');
             }
         }
     });
@@ -3641,15 +3637,11 @@ function endGame() {
     // 感染模式：播报胜负
     if (matchConfig.infectMode) {
         const survivors = Array.from(gameState.players.values()).filter(p => p.team === 2);
-        broadcast({
-            type: 'chatMessage',
-            playerId: 0,
-            playerName: '系统',
-            content: survivors.length
-                ? `幸存者顶住了！${survivors.map(p => p.nickname).join('、')} 活到了最后`
-                : '感染者阵营获胜！',
-            timestamp: Date.now()
-        });
+        if (survivors.length) {
+            sysChat(`幸存者顶住了！${survivors.map(p => p.nickname).join('、')} 活到了最后`, 'survivorsWin', { names: survivors.map(p => p.nickname) });
+        } else {
+            sysChat('感染者阵营获胜！', 'infectWin');
+        }
     }
 
     // 分队模式：播报团队胜负
@@ -3658,10 +3650,15 @@ function endGame() {
         gameState.players.forEach(p => {
             if (p.team === 1 || p.team === 2) totals[p.team] += p.score || 0;
         });
-        const content = totals[1] === totals[2]
-            ? `本局平局！红队 ${totals[1]} : ${totals[2]} 蓝队`
-            : `${TEAM_NAMES[totals[1] > totals[2] ? 1 : 2]}获胜！红队 ${totals[1]} : ${totals[2]} 蓝队`;
-        broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, timestamp: Date.now() });
+        if (totals[1] === totals[2]) {
+            sysChat(`本局平局！红队 ${totals[1]} : ${totals[2]} 蓝队`, 'teamDraw', { a: totals[1], b: totals[2] });
+        } else {
+            sysChat(
+                `${TEAM_NAMES[totals[1] > totals[2] ? 1 : 2]}获胜！红队 ${totals[1]} : ${totals[2]} 蓝队`,
+                'teamWin',
+                { teamId: totals[1] > totals[2] ? 1 : 2, a: totals[1], b: totals[2] }
+            );
+        }
     }
 
     // 广播游戏结束

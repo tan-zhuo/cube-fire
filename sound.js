@@ -33,7 +33,7 @@ class SoundFX {
         if (window.gameMusic) window.gameMusic.setMuted(!this.enabled);
         const btn = document.getElementById('soundToggle');
         if (btn) {
-            btn.textContent = this.enabled ? '声音 开' : '声音 关';
+            btn.textContent = (window.I18N ? I18N.t(this.enabled ? 'lp.soundOn' : 'lp.soundOff') : (this.enabled ? '声音 开' : '声音 关'));
             btn.classList.toggle('off', !this.enabled);
         }
         return this.enabled;

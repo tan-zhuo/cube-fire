@@ -101,7 +101,7 @@ async function hostCreateInvite() {
 async function hostAcceptAnswer(pc, code) {
     const payload = decodeCode(code);
     if (!payload || payload.t !== 'answer' || !payload.sdp) {
-        throw new Error('无效的应答码');
+        throw new Error(I18N.t('lb.invalidAnswer'));
     }
     await pc.setRemoteDescription({ type: 'answer', sdp: payload.sdp });
 }
@@ -110,7 +110,7 @@ async function hostAcceptAnswer(pc, code) {
 async function guestAcceptInvite(code) {
     const payload = decodeCode(code);
     if (!payload || payload.t !== 'offer' || !payload.sdp) {
-        throw new Error('无效的邀请码');
+        throw new Error(I18N.t('lb.invalidInvite'));
     }
     const pc = new RTCPeerConnection(RTC_CONFIG);
     const dcPromise = new Promise(resolve => {
@@ -170,7 +170,7 @@ function lobbyLocalList() {
     const out = [];
     Lobby.rooms.forEach((r, code) => {
         if (now - r.updatedAt > ROOM_TTL_MS) Lobby.rooms.delete(code);
-        else out.push({ code: r.code, hostName: r.hostName, mapName: r.mapName, teamMode: r.teamMode, mode: r.mode, players: r.players });
+        else out.push({ code: r.code, hostName: r.hostName, mapName: r.mapName, mapId: r.mapId, teamMode: r.teamMode, mode: r.mode, players: r.players });
     });
     return out.sort((a, b) => b.players - a.players);
 }
@@ -180,8 +180,9 @@ function lobbyHandleMessage(msg, reply) {
     if (msg.t === 'register' && msg.room && typeof msg.room.code === 'string' && msg.room.code.length === 6) {
         Lobby.rooms.set(msg.room.code, {
             code: msg.room.code,
-            hostName: String(msg.room.hostName || '无名房主').slice(0, 15),
-            mapName: String(msg.room.mapName || '未知地图').slice(0, 20),
+            hostName: String(msg.room.hostName || '').slice(0, 15),
+            mapName: String(msg.room.mapName || '').slice(0, 20),
+            mapId: String(msg.room.mapId || '').slice(0, 16),
             teamMode: !!msg.room.teamMode,
             mode: String(msg.room.mode || '').slice(0, 10),
             players: Math.max(0, Math.min(99, msg.room.players | 0)),
@@ -262,7 +263,7 @@ function lobbyEnsure() {
             if (peer.off) peer.off('error', onPeerError);
         };
         const timer = setTimeout(() => {
-            if (!settled) { settled = true; cleanup(); reject(new Error('目录连接超时')); }
+            if (!settled) { settled = true; cleanup(); reject(new Error(I18N.t('lb.dirTimeout'))); }
         }, 6000);
         peer.on('error', onPeerError);
         conn.on('open', () => {
@@ -317,12 +318,12 @@ async function lobbyFetchRooms() {
         const timer = setTimeout(() => {
             const i = Lobby.listWaiters.indexOf(done);
             if (i >= 0) Lobby.listWaiters.splice(i, 1);
-            reject(new Error('获取列表超时'));
+            reject(new Error(I18N.t('lb.listTimeout')));
         }, 5000);
         const done = rooms => { clearTimeout(timer); resolve(rooms); };
         Lobby.listWaiters.push(done);
         if (Lobby.conn && Lobby.conn.open) Lobby.conn.send({ t: 'list' });
-        else { clearTimeout(timer); reject(new Error('目录连接不可用')); }
+        else { clearTimeout(timer); reject(new Error(I18N.t('lb.dirUnavailable'))); }
     });
 }
 
@@ -358,8 +359,8 @@ function hostStartRoomService() {
     const codeEl = $('roomCodeDisplay');
     const statusEl = $('roomServiceStatus');
     if (!window.Peer) {
-        codeEl.textContent = '不可用';
-        statusEl.textContent = '房间码服务加载失败（可能无网络），请使用下方手动邀请码';
+        codeEl.textContent = I18N.t('lb.unavailable');
+        statusEl.textContent = I18N.t('lb.peerLoadFail');
         return;
     }
     let saved = null;
@@ -375,7 +376,7 @@ function hostStartRoomService() {
         peer.on('open', () => {
             hostPeer = peer;
             codeEl.textContent = code;
-            statusEl.textContent = '把房间码告诉朋友即可加入；游戏数据 P2P 直连';
+            statusEl.textContent = I18N.t('lb.shareCode');
             try { localStorage.setItem(HOST_CODE_KEY, code); } catch (e) {}
             if (hostRoomInfo) hostRoomInfo.code = code;
             // 公开房间：立即注册并开始心跳（同时驱动目录换代后的重新注册）
@@ -385,6 +386,7 @@ function hostStartRoomService() {
                         code,
                         hostName: hostRoomInfo.hostName,
                         mapName: hostRoomInfo.mapName,
+                        mapId: hostRoomInfo.mapId,
                         teamMode: hostRoomInfo.teamMode,
                         mode: hostRoomInfo.mode,
                         players: window.GameHost.connectionCount
@@ -402,7 +404,7 @@ function hostStartRoomService() {
                 });
                 conn.on('data', d => gconn.deliver(d));
                 conn.on('close', () => { gconn.close(); updateInviteCount(); });
-                statusEl.textContent = '新玩家已通过房间码加入';
+                statusEl.textContent = I18N.t('lb.guestJoined');
                 updateInviteCount();
             });
         });
@@ -415,8 +417,8 @@ function hostStartRoomService() {
                 try { peer.destroy(); } catch (e) {}
                 tryStart(); // 房间码撞车（或本机多开），换一个重试
             } else if (!hostPeer) {
-                codeEl.textContent = '不可用';
-                statusEl.textContent = '无法连接房间码服务（纯离线局域网？），请使用下方手动邀请码';
+                codeEl.textContent = I18N.t('lb.unavailable');
+                statusEl.textContent = I18N.t('lb.peerConnFail');
             }
         });
     };
@@ -442,7 +444,7 @@ function createPeerConnTransport(conn) {
 // cb: { status(msg), fail(msg), success() }
 function joinRoomWithCode(code, cb) {
     if (!window.Peer) {
-        cb.fail('房间码服务加载失败（可能无网络），请使用下方手动邀请码');
+        cb.fail(I18N.t('lb.peerLoadFail'));
         return;
     }
     let settled = false;
@@ -453,7 +455,7 @@ function joinRoomWithCode(code, cb) {
         try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
         guestPeer = null;
     };
-    const timer = setTimeout(() => fail('连接超时，请核对房间码后重试'), 15000);
+    const timer = setTimeout(() => fail(I18N.t('lb.connTimeout')), 15000);
 
     try { if (guestPeer) guestPeer.destroy(); } catch (e) {}
     const peer = new Peer({ debug: 0 });
@@ -470,16 +472,16 @@ function joinRoomWithCode(code, cb) {
             window.createGameTransport = () => createPeerConnTransport(conn);
             window.game.joinGame();
         });
-        conn.on('error', () => fail('连接房间失败，请重试'));
+        conn.on('error', () => fail(I18N.t('lb.connFail')));
     });
     peer.on('error', err => {
         clearTimeout(timer);
         if (err.type === 'peer-unavailable') {
-            fail('找不到该房间，请核对房间码（区分是否已过期）');
+            fail(I18N.t('lb.roomNotFound'));
         } else if (err.type === 'network' || err.type === 'server-error') {
-            fail('无法连接房间码服务（纯离线局域网？），请使用下方手动邀请码');
+            fail(I18N.t('lb.peerConnFail'));
         } else {
-            fail('连接失败: ' + (err.type || err.message || '未知错误'));
+            fail(I18N.t('lb.connFailPrefix') + (err.type || err.message || I18N.t('lb.unknownErr')));
         }
     });
 }
@@ -490,17 +492,17 @@ function guestJoinByCode() {
     if (!requireNickname()) return;
     const code = $('roomCodeInput').value.trim().toUpperCase().replace(/\s/g, '');
     if (code.length !== 6) {
-        showError(statusEl, '请输入 6 位房间码');
+        showError(statusEl, I18N.t('lb.need6'));
         return;
     }
     const btn = $('joinByCodeButton');
     btn.disabled = true;
     statusEl.style.color = '';
-    statusEl.textContent = '正在连接房间...';
+    statusEl.textContent = I18N.t('lb.connecting');
     joinRoomWithCode(code, {
         status(msg) { statusEl.textContent = msg; },
         fail(msg) { btn.disabled = false; showError(statusEl, msg); },
-        success() { statusEl.textContent = '连接成功，正在进入游戏...'; }
+        success() { statusEl.textContent = I18N.t('lb.connected'); }
     });
 }
 
@@ -511,7 +513,7 @@ async function quickPlay() {
     if (btn) btn.disabled = true;
     const done = () => { if (btn) btn.disabled = false; };
     const fallbackHost = () => {
-        window.showToast('暂无公开房间，为你开新房并召唤机器人', 'info');
+        window.showToast(I18N.t('lb.qpNone'), 'info');
         startAsHost();
         setTimeout(() => {
             for (let i = 0; i < 3; i++) window.GameHost.addBot();
@@ -519,7 +521,7 @@ async function quickPlay() {
         done();
     };
     if (!window.Peer) { fallbackHost(); return; }
-    window.showToast('正在寻找对局...', 'info');
+    window.showToast(I18N.t('lb.qpSearching'), 'info');
     let rooms = [];
     try { rooms = await lobbyFetchRooms(); } catch (e) {}
     rooms = (rooms || []).sort((a, b) => (b.players || 0) - (a.players || 0));
@@ -527,7 +529,7 @@ async function quickPlay() {
     const target = rooms[0];
     joinRoomWithCode(target.code, {
         status() {},
-        fail() { window.showToast('加入房间失败，为你开新房', 'warn'); fallbackHost(); },
+        fail() { window.showToast(I18N.t('lb.qpFail'), 'warn'); fallbackHost(); },
         success() { done(); }
     });
 }
@@ -547,7 +549,7 @@ function showError(el, msg) {
 function requireNickname() {
     const nickname = $('nicknameInput').value.trim();
     if (!nickname) {
-        window.showToast('请先输入昵称', 'warn');
+        window.showToast(I18N.t('g.needNick'), 'warn');
         $('nicknameInput').focus();
         return null;
     }
@@ -558,11 +560,11 @@ async function copyText(text, btn) {
     try {
         await navigator.clipboard.writeText(text);
         const old = btn.textContent;
-        btn.textContent = '已复制';
+        btn.textContent = I18N.t('lb.copied');
         setTimeout(() => { btn.textContent = old; }, 1500);
     } catch (e) {
         // 剪贴板不可用时回退为手动复制
-        window.showToast('自动复制失败，请手动全选复制', 'warn');
+        window.showToast(I18N.t('lb.copyFail'), 'warn');
     }
 }
 
@@ -578,7 +580,8 @@ function startAsHost() {
     const modeVal = teamModeSelect ? teamModeSelect.value : 'ffa';
     hostRoomInfo = {
         hostName: nickname,
-        mapName: (mapSelect && mapSelect.selectedOptions[0]) ? mapSelect.selectedOptions[0].textContent : '经典竞技场',
+        mapName: (mapSelect && mapSelect.selectedOptions[0]) ? mapSelect.selectedOptions[0].textContent : I18N.t('map.classic'),
+        mapId: mapSelect ? mapSelect.value : 'classic',
         teamMode: modeVal === 'team',
         mode: modeVal,
         isPublic: !visibilitySelect || visibilitySelect.value === 'public'
@@ -598,7 +601,7 @@ function startAsHost() {
 async function hostGenerateInvite() {
     const statusEl = $('inviteStatus');
     statusEl.style.color = '';
-    statusEl.textContent = '正在生成邀请码...';
+    statusEl.textContent = I18N.t('lb.genInviteBusy');
     try {
         // 丢弃上一份未完成的邀请
         if (pendingInvite && pendingInvite.dc.readyState !== 'open') {
@@ -608,41 +611,41 @@ async function hostGenerateInvite() {
         pendingInvite.dc.onopen = () => {
             attachChannelToHost(pendingInvite.dc);
             pendingInvite = null;
-            statusEl.textContent = '新玩家已连接，可继续生成下一份邀请码';
+            statusEl.textContent = I18N.t('lb.guestConnected');
             updateInviteCount();
         };
         $('inviteCodeOutput').value = pendingInvite.code;
         $('inviteExchange').classList.remove('hidden');
-        statusEl.textContent = '把邀请码发给对方，等待对方回传应答码';
+        statusEl.textContent = I18N.t('lb.sendInvite');
     } catch (e) {
-        showError(statusEl, '生成邀请码失败: ' + e.message);
+        showError(statusEl, I18N.t('lb.genInviteFail') + e.message);
     }
 }
 
 async function hostConfirmAnswer() {
     const statusEl = $('inviteStatus');
     if (!pendingInvite) {
-        showError(statusEl, '请先生成邀请码');
+        showError(statusEl, I18N.t('lb.genFirst'));
         return;
     }
     const code = $('answerCodeInput').value.trim();
     if (!code) {
-        showError(statusEl, '请粘贴对方的应答码');
+        showError(statusEl, I18N.t('lb.pasteAnswer'));
         return;
     }
     try {
         await hostAcceptAnswer(pendingInvite.pc, code);
         statusEl.style.color = '';
-        statusEl.textContent = '正在建立连接...';
+        statusEl.textContent = I18N.t('lb.establishing');
         $('answerCodeInput').value = '';
     } catch (e) {
-        showError(statusEl, '应答码无效或连接失败: ' + e.message);
+        showError(statusEl, I18N.t('lb.answerInvalid') + e.message);
     }
 }
 
 function updateInviteCount() {
     const el = $('inviteCount');
-    if (el) el.textContent = `当前在线玩家: ${window.GameHost.connectionCount}`;
+    if (el) el.textContent = I18N.t('lb.online', { n: window.GameHost.connectionCount });
 }
 
 function refreshBotCount() {
@@ -656,28 +659,28 @@ async function guestGenerateAnswer() {
     if (!requireNickname()) return;
     const code = $('inviteCodeInput').value.trim();
     if (!code) {
-        showError(statusEl, '请先粘贴房主的邀请码');
+        showError(statusEl, I18N.t('lb.pasteInviteFirst'));
         return;
     }
     statusEl.style.color = '';
-    statusEl.textContent = '正在生成应答码...';
+    statusEl.textContent = I18N.t('lb.genAnswerBusy');
     try {
         const result = await guestAcceptInvite(code);
         guestPc = result.pc;
         $('answerCodeOutput').value = result.code;
         $('guestAnswerArea').classList.remove('hidden');
-        statusEl.textContent = '把应答码发给房主，等待房主确认...';
+        statusEl.textContent = I18N.t('lb.sendAnswer');
 
         const dc = await result.dcPromise;
         const enterGame = () => {
-            statusEl.textContent = '连接成功，正在进入游戏...';
+            statusEl.textContent = I18N.t('lb.connected');
             window.createGameTransport = () => createChannelTransport(dc);
             window.game.joinGame();
         };
         if (dc.readyState === 'open') enterGame();
         else dc.onopen = enterGame;
     } catch (e) {
-        showError(statusEl, e.message || '连接失败');
+        showError(statusEl, e.message || I18N.t('lb.connFailShort'));
     }
 }
 
@@ -693,14 +696,14 @@ function renderRecentRooms() {
     if (!list.length) return;
     const label = document.createElement('span');
     label.className = 'recent-label';
-    label.textContent = '最近:';
+    label.textContent = I18N.t('lb.recent');
     wrap.appendChild(label);
     list.slice(0, 3).forEach(r => {
         const chip = document.createElement('button');
         chip.className = 'recent-chip';
         chip.type = 'button';
         chip.textContent = r.code;
-        chip.title = '加入房间 ' + r.code;
+        chip.title = I18N.t('lb.joinRoomTitle') + r.code;
         chip.addEventListener('click', () => {
             $('roomCodeInput').value = r.code;
             guestJoinByCode();
@@ -716,7 +719,7 @@ function renderRoomList(rooms) {
     if (!rooms || !rooms.length) {
         const empty = document.createElement('div');
         empty.className = 'room-list-empty';
-        empty.textContent = '暂无公开房间 — 可以直接输入房间码加入';
+        empty.textContent = I18N.t('lb.noRooms');
         listEl.appendChild(empty);
         return;
     }
@@ -729,11 +732,12 @@ function renderRoomList(rooms) {
         host.textContent = r.hostName;
         const meta = document.createElement('span');
         meta.className = 'room-meta';
-        const modeName = ({ team: '红蓝对抗', infect: '感染模式' })[r.mode] || (r.teamMode ? '红蓝对抗' : '个人混战');
-        meta.textContent = `${r.mapName} · ${modeName} · ${r.players}人`;
+        const modeName = ({ team: I18N.t('mode.team'), infect: I18N.t('mode.infect') })[r.mode] || (r.teamMode ? I18N.t('mode.team') : I18N.t('mode.ffa'));
+        const mapLabel = r.mapId ? I18N.t('map.' + r.mapId) : (r.mapName || I18N.t('lb.unknownMap'));
+        meta.textContent = I18N.t('lb.roomMeta', { map: mapLabel === 'map.' + r.mapId ? r.mapName : mapLabel, mode: modeName, players: r.players });
         const go = document.createElement('span');
         go.className = 'room-go';
-        go.textContent = '加入 →';
+        go.textContent = I18N.t('lb.joinArrow');
         row.append(host, meta, go);
         row.addEventListener('click', () => {
             $('roomCodeInput').value = r.code;
@@ -746,7 +750,7 @@ function renderRoomList(rooms) {
 function refreshRoomList() {
     const listEl = $('roomList');
     if (!listEl || !window.Peer) {
-        if (listEl) renderRoomListError('房间列表服务不可用（可能无网络）');
+        if (listEl) renderRoomListError(I18N.t('lb.dirDown'));
         return;
     }
     lobbyFetchRooms()
@@ -754,7 +758,7 @@ function refreshRoomList() {
             // 面板已经关闭就不再渲染
             if (!$('guestPanel').classList.contains('hidden')) renderRoomList(rooms);
         })
-        .catch(() => renderRoomListError('获取房间列表失败，稍后自动重试'));
+        .catch(() => renderRoomListError(I18N.t('lb.listFail')));
 }
 
 function renderRoomListError(msg) {
@@ -975,7 +979,8 @@ document.addEventListener('DOMContentLoaded', () => {
         window.GameHost.getMaps().forEach(m => {
             const opt = document.createElement('option');
             opt.value = m.id;
-            opt.textContent = m.name;
+            const localized = I18N.t('map.' + m.id);
+            opt.textContent = localized === 'map.' + m.id ? m.name : localized;
             mapSelect.appendChild(opt);
         });
     }
@@ -997,7 +1002,7 @@ document.addEventListener('DOMContentLoaded', () => {
         $('modeButtons').classList.remove('hidden');
     });
     $('refreshRoomsButton').addEventListener('click', () => {
-        renderRoomListError('正在刷新...');
+        renderRoomListError(I18N.t('lb.refreshing'));
         refreshRoomList();
     });
 
