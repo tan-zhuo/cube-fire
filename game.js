@@ -136,7 +136,8 @@ class BinaryDecoder {
 
 // 粒子类
 class Particle {
-    constructor(x, y, vx, vy, color, life, size = 2) {
+    // opts: gravity 重力 | shape 'circle'/'streak'(速度方向光条)/'rect'(旋转碎片) | spin 自转 | glow 加色发光
+    constructor(x, y, vx, vy, color, life, size = 2, opts = undefined) {
         this.x = x;
         this.y = y;
         this.vx = vx;
@@ -145,11 +146,18 @@ class Particle {
         this.life = life;
         this.maxLife = life;
         this.size = size;
+        this.gravity = (opts && opts.gravity) || 0;
+        this.shape = (opts && opts.shape) || 'circle';
+        this.rot = Math.random() * Math.PI * 2;
+        this.spin = (opts && opts.spin) || 0;
+        this.glow = !!(opts && opts.glow);
     }
 
     update() {
         this.x += this.vx;
         this.y += this.vy;
+        this.vy += this.gravity;
+        this.rot += this.spin;
         this.life--;
         this.vx *= 0.98; // 阻力
         this.vy *= 0.98;
@@ -159,10 +167,27 @@ class Particle {
         const alpha = this.life / this.maxLife;
         ctx.save();
         ctx.globalAlpha = alpha;
+        if (this.glow) ctx.globalCompositeOperation = 'lighter';
         ctx.fillStyle = this.color;
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-        ctx.fill();
+        if (this.shape === 'streak') {
+            // 沿速度方向的光条（火花）
+            ctx.strokeStyle = this.color;
+            ctx.lineWidth = this.size;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(this.x - this.vx * 2.4, this.y - this.vy * 2.4);
+            ctx.lineTo(this.x, this.y);
+            ctx.stroke();
+        } else if (this.shape === 'rect') {
+            // 旋转小碎片（弹壳/碎屑）
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.rot);
+            ctx.fillRect(-this.size, -this.size * 0.6, this.size * 2, this.size * 1.2);
+        } else {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
         ctx.restore();
     }
 
@@ -334,14 +359,54 @@ class Effect {
                         Math.sin(a) * speed,
                         colors[(Math.random() * colors.length) | 0],
                         10 + ((Math.random() * 6) | 0),
-                        1 + Math.random() * 1.5
+                        1 + Math.random() * 1.5,
+                        { glow: true }
                     ));
                 }
                 this.particles.push(new Particle(
                     this.x, this.y,
                     Math.cos(dir) * 0.5, Math.sin(dir) * 0.5,
-                    '#ffffff', 6, this.weapon === 'shotgun' ? 4 : 3
+                    '#ffffff', 6, this.weapon === 'shotgun' ? 4 : 3, { glow: true }
                 ));
+                // 抛壳（垂直枪口方向弹出，带重力翻滚）
+                if (this.weapon !== 'rpg') {
+                    const side = Math.random() < 0.5 ? 1 : -1;
+                    const ca = dir + side * Math.PI / 2 + (Math.random() - 0.5) * 0.5;
+                    this.particles.push(new Particle(
+                        this.x - Math.cos(dir) * 10, this.y - Math.sin(dir) * 10,
+                        Math.cos(ca) * (1.2 + Math.random()),
+                        Math.sin(ca) * (1.2 + Math.random()) - 1.6,
+                        '#e8c268', 26, 1.6,
+                        { gravity: 0.16, shape: 'rect', spin: 0.4 }
+                    ));
+                }
+                // 一缕硝烟
+                this.particles.push(new Particle(
+                    this.x, this.y,
+                    Math.cos(dir) * 0.6 + (Math.random() - 0.5) * 0.4,
+                    Math.sin(dir) * 0.6 - 0.5,
+                    'rgba(160, 170, 190, 0.5)', 26, 2.5 + Math.random() * 2
+                ));
+                break;
+            }
+            case 'hitmarker': {
+                // 击中标记（无粒子，draw 中绘制）
+                break;
+            }
+            case 'kill': {
+                // 击杀确认：金色星屑爆散
+                for (let i = 0; i < 12; i++) {
+                    const a = Math.random() * Math.PI * 2;
+                    const speed = 2 + Math.random() * 4;
+                    this.particles.push(new Particle(
+                        this.x, this.y,
+                        Math.cos(a) * speed, Math.sin(a) * speed,
+                        Math.random() < 0.4 ? '#ffffff' : '#ffd76b',
+                        16 + ((Math.random() * 12) | 0),
+                        1.5 + Math.random() * 2,
+                        { glow: true, shape: Math.random() < 0.5 ? 'streak' : 'circle' }
+                    ));
+                }
                 break;
             }
             case 'explosion': {
@@ -371,6 +436,18 @@ class Effect {
                         3 + Math.random() * 3.5
                     ));
                 }
+                // 高速火星条（带重力坠落）
+                for (let i = 0; i < 10; i++) {
+                    const a = Math.random() * Math.PI * 2;
+                    const speed = 4 + Math.random() * 6;
+                    this.particles.push(new Particle(
+                        this.x, this.y,
+                        Math.cos(a) * speed, Math.sin(a) * speed,
+                        Math.random() < 0.5 ? '#ffe1a8' : '#ff9c42',
+                        14 + ((Math.random() * 10) | 0), 1.6,
+                        { shape: 'streak', glow: true, gravity: 0.15 }
+                    ));
+                }
                 break;
             }
             case 'crate': {
@@ -389,18 +466,35 @@ class Effect {
                 }
                 break;
             }
-            case 'hit':
-                for (let i = 0; i < 12; i++) {
+            case 'hit': {
+                // 命中爆点：白色亮芯 + 红色碎片 + 火花条
+                this.particles.push(new Particle(this.x, this.y, 0, 0, '#ffffff', 6, 5, { glow: true }));
+                for (let i = 0; i < 8; i++) {
                     const angle = Math.random() * Math.PI * 2;
-                    const speed = 1 + Math.random() * 4;
+                    const speed = 1.5 + Math.random() * 3.5;
                     this.particles.push(new Particle(
                         this.x, this.y,
                         Math.cos(angle) * speed,
                         Math.sin(angle) * speed,
-                        '#e74c3c', 40, 3
+                        Math.random() < 0.3 ? '#ffb3a0' : '#f2495c',
+                        16 + ((Math.random() * 12) | 0),
+                        1.5 + Math.random() * 2,
+                        { gravity: 0.06 }
+                    ));
+                }
+                for (let i = 0; i < 4; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = 3 + Math.random() * 3;
+                    this.particles.push(new Particle(
+                        this.x, this.y,
+                        Math.cos(angle) * speed,
+                        Math.sin(angle) * speed,
+                        '#ffe1a8', 10 + ((Math.random() * 6) | 0), 1.4,
+                        { shape: 'streak', glow: true }
                     ));
                 }
                 break;
+            }
             case 'powerup':
                 for (let i = 0; i < 15; i++) {
                     const angle = Math.random() * Math.PI * 2;
@@ -439,26 +533,28 @@ class Effect {
                 break;
                 
             case 'wallHit':
-                // 子弹击中墙体的灰色爆炸粒子
-                for (let i = 0; i < 10; i++) {
+                // 尘土（重力下落的灰粒）
+                for (let i = 0; i < 6; i++) {
                     const angle = Math.random() * Math.PI * 2;
-                    const speed = 0.5 + Math.random() * 3;
+                    const speed = 0.5 + Math.random() * 2;
                     this.particles.push(new Particle(
                         this.x, this.y,
                         Math.cos(angle) * speed,
-                        Math.sin(angle) * speed,
-                        '#888888', 30, 1 + Math.random() * 2
+                        Math.sin(angle) * speed - 0.8,
+                        '#9aa4b8', 22 + ((Math.random() * 10) | 0), 1.5 + Math.random() * 1.5,
+                        { gravity: 0.1 }
                     ));
                 }
-                // 添加火花效果
+                // 迸溅火花条
                 for (let i = 0; i < 5; i++) {
                     const angle = Math.random() * Math.PI * 2;
-                    const speed = 2 + Math.random() * 4;
+                    const speed = 2.5 + Math.random() * 4;
                     this.particles.push(new Particle(
                         this.x, this.y,
                         Math.cos(angle) * speed,
                         Math.sin(angle) * speed,
-                        '#ffaa00', 20, 1
+                        '#ffcf6b', 9 + ((Math.random() * 6) | 0), 1.2,
+                        { shape: 'streak', glow: true, gravity: 0.12 }
                     ));
                 }
                 break;
@@ -475,6 +571,53 @@ class Effect {
 
     draw(ctx) {
         this.particles.forEach(particle => particle.draw(ctx));
+
+        // 枪口星形闪光（前 80ms，沿射击方向的四芒星）
+        if (this.type === 'shoot') {
+            const el = Date.now() - this.startTime;
+            if (el < 80) {
+                const p = 1 - el / 80;
+                const big = this.weapon === 'shotgun' || this.weapon === 'rpg';
+                const L = (big ? 15 : 10) * (0.6 + p * 0.4);
+                ctx.save();
+                ctx.globalCompositeOperation = 'lighter';
+                ctx.globalAlpha = p;
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+                const star = (len, wid, color) => {
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    ctx.moveTo(len, 0);
+                    ctx.quadraticCurveTo(0, wid, -len * 0.45, 0);
+                    ctx.quadraticCurveTo(0, -wid, len, 0);
+                    ctx.fill();
+                };
+                star(L * 1.5, L * 0.4, 'rgba(255, 200, 110, 0.9)');
+                ctx.rotate(Math.PI / 2);
+                star(L * 0.7, L * 0.3, 'rgba(255, 200, 110, 0.7)');
+                ctx.rotate(-Math.PI / 2);
+                star(L, L * 0.26, '#fff6dd');
+                ctx.restore();
+            }
+        }
+
+        // 击中标记：准星四角短线向外弹开（打中敌人时的手感反馈）
+        if (this.type === 'hitmarker') {
+            const p = Math.min(1, (Date.now() - this.startTime) / this.duration);
+            const d = 5 + p * 5;
+            ctx.save();
+            ctx.globalAlpha = 1 - p;
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2.5;
+            ctx.lineCap = 'round';
+            for (const [sx, sy] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+                ctx.beginPath();
+                ctx.moveTo(this.x + sx * d, this.y + sy * d);
+                ctx.lineTo(this.x + sx * (d + 5), this.y + sy * (d + 5));
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
 
         // 爆炸附加表现：白闪 + 冲击波环扩散到爆炸半径
         if (this.type === 'explosion') {
@@ -583,6 +726,7 @@ class GameClient {
         this.terrain = [];
         this.particles = [];
         this.effects = [];
+        this.trailParticles = []; // 火箭烟迹/落地尘等松散粒子
         this.meleeIndicators = [];
         this.knifeSwingEffects = [];
         this.damageNumbers = [];
@@ -1390,9 +1534,19 @@ class GameClient {
                     this.triggerFlash('#e03131', isKill ? 0.30 : 0.16);
                 } else if (shooterId === this.playerId) {
                     if (window.gameSound) (isKill ? window.gameSound.kill() : window.gameSound.hitConfirm());
+                    // 击中标记（手感反馈）
+                    if (targetPlayer) {
+                        this.effects.push(new Effect(targetPlayer.x + 10, targetPlayer.y + 10, 'hitmarker', 220));
+                    }
                     if (isKill) {
                         this.addShake(4);
                         this.triggerFlash('#ffffff', 0.12);
+                        if (targetPlayer) {
+                            this.effects.push(new Effect(targetPlayer.x + 10, targetPlayer.y + 10, 'kill', 600));
+                            this.damageNumbers.push(new DamageNumber(
+                                targetPlayer.x + 10, targetPlayer.y - 22, '+100', '#ffd76b'
+                            ));
+                        }
                     }
                 } else if (targetPlayer && window.gameSound) {
                     window.gameSound.wallHit(this.volFor(targetPlayer.x, targetPlayer.y) * 0.5);
@@ -2161,7 +2315,7 @@ class GameClient {
         });
     }
 
-    // 道具箱：2.5D 悬浮补给箱（内容未知，拾取时揭示）
+    // 道具箱：2.5D 悬浮补给箱（武器箱金木色/增益箱青蓝色，具体内容拾取时揭示）
     drawPowerup(powerup) {
         if (!powerup) return;
         const ctx = this.backCtx;
@@ -2173,12 +2327,18 @@ class GameClient {
         const topY = baseY - 6 + bob; // 箱顶中心
         const ex = 7; // 挤出高度
 
+        // 按类别配色
+        const isWeapon = typeof powerup.type === 'string' && powerup.type.startsWith('weapon_');
+        const P = isWeapon
+            ? { ring: '#fbbf24', side: '#3d3325', topA: '#8a6f3d', topB: '#5d4a29', lid: 'rgba(251, 191, 36, 0.65)', corner: '#c9a75c', glyph: '#ffe9b3', mark: '武' }
+            : { ring: '#4dd0e1', side: '#1f3d44', topA: '#3f7d8c', topB: '#295660', lid: 'rgba(77, 208, 225, 0.65)', corner: '#7fd3e0', glyph: '#d9f6fb', mark: '+' };
+
         ctx.save();
 
         // 地面光圈（呼吸脉动）
         const pulse = 0.5 + Math.sin(time * 0.004 + powerup.id) * 0.2;
         ctx.globalAlpha = pulse;
-        ctx.strokeStyle = '#fbbf24';
+        ctx.strokeStyle = P.ring;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.ellipse(cx, baseY + s / 2 + 3, s * 0.75, s * 0.28, 0, 0, Math.PI * 2);
@@ -2194,38 +2354,38 @@ class GameClient {
         ctx.globalAlpha = 1;
         const x0 = cx - s / 2, y0 = topY - s / 2;
         // 侧面
-        ctx.fillStyle = '#3d3325';
+        ctx.fillStyle = P.side;
         ctx.fillRect(x0, y0 + s - ex, s, ex);
         // 顶面
         const topGrad = ctx.createLinearGradient(x0, y0 - ex, x0, y0 + s - ex);
-        topGrad.addColorStop(0, '#8a6f3d');
-        topGrad.addColorStop(1, '#5d4a29');
+        topGrad.addColorStop(0, P.topA);
+        topGrad.addColorStop(1, P.topB);
         ctx.fillStyle = topGrad;
         ctx.fillRect(x0, y0 - ex, s, s);
         // 描边与箱盖缝
         ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
         ctx.lineWidth = 1.5;
         ctx.strokeRect(x0 + 0.5, y0 - ex + 0.5, s - 1, s - 1);
-        ctx.strokeStyle = 'rgba(251, 191, 36, 0.65)';
+        ctx.strokeStyle = P.lid;
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(x0, y0 - ex + s * 0.32);
         ctx.lineTo(x0 + s, y0 - ex + s * 0.32);
         ctx.stroke();
         // 金属包角
-        ctx.fillStyle = '#c9a75c';
+        ctx.fillStyle = P.corner;
         const c = 3.5;
         ctx.fillRect(x0, y0 - ex, c, c);
         ctx.fillRect(x0 + s - c, y0 - ex, c, c);
         ctx.fillRect(x0, y0 - ex + s - c, c, c);
         ctx.fillRect(x0 + s - c, y0 - ex + s - c, c, c);
 
-        // 中央问号（内容未知）
-        ctx.fillStyle = '#ffe9b3';
-        ctx.font = `bold ${Math.round(s * 0.62)}px system-ui, sans-serif`;
+        // 中央类别标记（武=武器箱 +=增益箱）
+        ctx.fillStyle = P.glyph;
+        ctx.font = `bold ${Math.round(s * (isWeapon ? 0.55 : 0.68))}px system-ui, sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('?', cx, y0 - ex + s * 0.62);
+        ctx.fillText(P.mark, cx, y0 - ex + s * 0.6);
 
         ctx.restore();
     }
@@ -2328,11 +2488,35 @@ class GameClient {
                         bullet.x = nx;
                         bullet.y = ny;
                     }
+                    // 落地扬尘（停驻瞬间一次）
+                    if (!bullet.vx && !bullet.vy && !bullet.landed) {
+                        bullet.landed = true;
+                        for (let i = 0; i < 5; i++) {
+                            const a = Math.random() * Math.PI * 2;
+                            this.trailParticles.push(new Particle(
+                                bullet.x, bullet.y + 3,
+                                Math.cos(a) * (0.5 + Math.random()), -0.4 - Math.random() * 0.6,
+                                'rgba(170, 180, 200, 0.45)', 18 + ((Math.random() * 8) | 0),
+                                1.5 + Math.random() * 1.5, { gravity: 0.05 }
+                            ));
+                        }
+                    }
                 }
                 return true;
             }
             bullet.x += bullet.vx;
             bullet.y += bullet.vy;
+
+            // 火箭弹持续烟迹
+            if (bullet.kind === 1 && Math.random() < 0.7 && this.trailParticles.length < 260) {
+                this.trailParticles.push(new Particle(
+                    bullet.x - bullet.vx * 1.2 + (Math.random() - 0.5) * 2,
+                    bullet.y - bullet.vy * 1.2 + (Math.random() - 0.5) * 2,
+                    (Math.random() - 0.5) * 0.4, -0.25 - Math.random() * 0.3,
+                    Math.random() < 0.3 ? 'rgba(255, 176, 90, 0.55)' : 'rgba(150, 158, 175, 0.5)',
+                    20 + ((Math.random() * 14) | 0), 2 + Math.random() * 2.2
+                ));
+            }
 
             // 检查子弹是否超出边界
             return bullet.x > 0 && bullet.x < this.canvas.width &&
@@ -2343,6 +2527,12 @@ class GameClient {
         this.effects = this.effects.filter(effect => {
             effect.update();
             return !effect.isDead();
+        });
+
+        // 更新松散粒子（烟迹/尘土）
+        this.trailParticles = this.trailParticles.filter(p => {
+            p.update();
+            return !p.isDead();
         });
 
         // 更新近战攻击指示器
@@ -2683,11 +2873,9 @@ class GameClient {
     }
 
     showHitEffect(targetId) {
-        // 简单的击中效果
+        // 受击白闪（drawPlayer 中叠加绘制）
         const player = this.players.get(targetId);
-        if (player) {
-            // 可以在这里添加击中特效
-        }
+        if (player) player.hitFlashUntil = Date.now() + 110;
     }
 
     // 屏幕震动（叠加，帧间衰减）
@@ -2849,6 +3037,9 @@ class GameClient {
             else this.drawPlayer(item.o);
         });
 
+        // 绘制烟迹/尘土（垫在子弹下层）
+        this.trailParticles.forEach(p => p.draw(this.backCtx));
+
         // 绘制子弹
         this.bullets.forEach(bullet => {
             this.drawBullet(bullet);
@@ -2943,6 +3134,14 @@ class GameClient {
         this.backCtx.beginPath();
         this.backCtx.arc(-size * 0.22, -size * 0.22, size * 0.13, 0, Math.PI * 2);
         this.backCtx.fill();
+
+        // 受击白闪
+        if (player.hitFlashUntil && player.hitFlashUntil > Date.now()) {
+            this.backCtx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+            this.backCtx.beginPath();
+            this.backCtx.roundRect(-size / 2, -size / 2, size, size, 5);
+            this.backCtx.fill();
+        }
 
         // 卡通眼睛（旋转坐标系里 +x 即朝向）
         if (player.isAlive) {
@@ -3153,40 +3352,37 @@ class GameClient {
         }
 
         this.backCtx.save();
-        
-        // 绘制子弹尾迹
-        const trailLength = 8;
-        for (let i = 1; i <= trailLength; i++) {
-            const alpha = (trailLength - i) / trailLength * 0.3;
-            const trailSize = size * (trailLength - i) / trailLength;
-            const trailX = bullet.x - bullet.vx * i * 0.5;
-            const trailY = bullet.y - bullet.vy * i * 0.5;
-            
-            this.backCtx.globalAlpha = alpha;
-            this.backCtx.fillStyle = '#ffaa00';
-            this.backCtx.beginPath();
-            this.backCtx.arc(trailX, trailY, trailSize / 2, 0, Math.PI * 2);
-            this.backCtx.fill();
-        }
-        
-        // 绘制主子弹
-        this.backCtx.globalAlpha = 1;
-        
-        // 创建子弹渐变色彩
+
+        // 曳光弹：沿速度方向的发光渐变光条 + 亮芯
+        this.backCtx.globalCompositeOperation = 'lighter';
+        const tailX = bullet.x - bullet.vx * 2.6;
+        const tailY = bullet.y - bullet.vy * 2.6;
+        const tracer = this.backCtx.createLinearGradient(tailX, tailY, bullet.x, bullet.y);
+        tracer.addColorStop(0, 'rgba(255, 150, 40, 0)');
+        tracer.addColorStop(0.6, 'rgba(255, 190, 80, 0.55)');
+        tracer.addColorStop(1, 'rgba(255, 235, 170, 0.95)');
+        this.backCtx.strokeStyle = tracer;
+        this.backCtx.lineWidth = size * 0.9;
+        this.backCtx.lineCap = 'round';
+        this.backCtx.beginPath();
+        this.backCtx.moveTo(tailX, tailY);
+        this.backCtx.lineTo(bullet.x, bullet.y);
+        this.backCtx.stroke();
+
+        // 亮芯
         const gradient = this.backCtx.createRadialGradient(
             bullet.x, bullet.y, 0,
-            bullet.x, bullet.y, size / 2
+            bullet.x, bullet.y, size * 0.9
         );
         gradient.addColorStop(0, '#ffffff');
-        gradient.addColorStop(0.7, '#ffff44');
-        gradient.addColorStop(1, '#ffaa00');
-        
+        gradient.addColorStop(0.5, '#ffe9a0');
+        gradient.addColorStop(1, 'rgba(255, 170, 0, 0)');
         this.backCtx.fillStyle = gradient;
-        this.backCtx.shadowColor = '#ffff00';
-        this.backCtx.shadowBlur = 8;
         this.backCtx.beginPath();
-        this.backCtx.arc(bullet.x, bullet.y, size / 2, 0, Math.PI * 2);
+        this.backCtx.arc(bullet.x, bullet.y, size * 0.9, 0, Math.PI * 2);
         this.backCtx.fill();
+        this.backCtx.globalCompositeOperation = 'source-over';
+        this.backCtx.globalAlpha = 1;
         
         // 添加闪烁效果
         this.backCtx.shadowBlur = 0;

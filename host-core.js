@@ -65,7 +65,7 @@ const GAME_CONFIG = {
     MAX_HEALTH: 100,
     RESPAWN_TIME: 3000, // 3秒复活时间
     POWERUP_SIZE: 15,
-    POWERUP_SPAWN_INTERVAL: 12000, // 12秒生成一个道具箱
+    POWERUP_SPAWN_INTERVAL: 8000, // 8秒生成一个道具箱
     POWERUP_DURATION: 15000, // 道具持续时间15秒
     TERRAIN_SIZE: 40, // 地形块大小
     MELEE_RANGE: 50, // 近战攻击范围
@@ -2818,14 +2818,14 @@ function generateTerrain(mapId) {
 
 // 生成道具
 function spawnPowerup() {
-    // 限制同时存在的道具箱数量不超过5个
-    if (gameState.powerups.length >= 5) {
+    // 限制同时存在的道具箱数量不超过8个
+    if (gameState.powerups.length >= 8) {
         return;
     }
 
-    // 50% 武器箱 / 50% 增益箱（含手雷补给）
+    // 65% 武器箱 / 35% 增益箱（含手雷补给）
     let type;
-    if (Math.random() < 0.5) {
+    if (Math.random() < 0.65) {
         const weapons = [POWERUP_TYPES.WEAPON_SMG, POWERUP_TYPES.WEAPON_SHOTGUN, POWERUP_TYPES.WEAPON_SNIPER, POWERUP_TYPES.WEAPON_RPG];
         type = weapons[Math.floor(Math.random() * weapons.length)];
     } else {
