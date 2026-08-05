@@ -3265,7 +3265,8 @@ function destroyTerrainInRadius(x, y, radius, shooterId) {
     broadcast({
         type: 'terrainRemove',
         ids,
-        breaks: hit.filter(b => b.type === 'crate').map(b => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 }))
+        breaks: hit.filter(b => b.type === 'crate').map(b => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 })),
+        barrels: hit.filter(b => b.type === 'barrel').map(b => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 }))
     });
     // 油桶连锁爆炸（错峰引爆，层次感）
     hit.filter(b => b.type === 'barrel').forEach((b, i) => {
@@ -3278,7 +3279,12 @@ function destroyTerrainInRadius(x, y, radius, shooterId) {
 // 子弹打中油桶：立即引爆
 function detonateBarrelByBullet(block, shooterId) {
     gameState.terrain = gameState.terrain.filter(b => b.id !== block.id);
-    broadcast({ type: 'terrainRemove', ids: [block.id], breaks: [] });
+    broadcast({
+        type: 'terrainRemove',
+        ids: [block.id],
+        breaks: [],
+        barrels: [{ x: block.x + block.width / 2, y: block.y + block.height / 2 }]
+    });
     explodeAt(block.x + block.width / 2, block.y + block.height / 2, 85, 70, shooterId, '油桶');
 }
 

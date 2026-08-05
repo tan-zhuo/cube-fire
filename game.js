@@ -151,6 +151,8 @@ class Particle {
         this.rot = Math.random() * Math.PI * 2;
         this.spin = (opts && opts.spin) || 0;
         this.glow = !!(opts && opts.glow);
+        this.floor = opts ? opts.floor : undefined; // 地面高度：碎片落地弹跳
+        this.bounces = 0;
     }
 
     update() {
@@ -161,6 +163,20 @@ class Particle {
         this.life--;
         this.vx *= 0.98; // 阻力
         this.vy *= 0.98;
+        // 落地弹跳（衰减两次后静止滞留）
+        if (this.floor !== undefined && this.y >= this.floor && this.vy > 0) {
+            this.y = this.floor;
+            this.bounces++;
+            if (this.bounces > 2) {
+                this.vy = 0;
+                this.vx *= 0.5;
+                this.spin *= 0.4;
+                this.gravity = 0;
+            } else {
+                this.vy *= -0.5;
+                this.vx *= 0.7;
+            }
+        }
     }
 
     draw(ctx) {
@@ -481,18 +497,33 @@ class Effect {
                 break;
             }
             case 'crateBreak': {
-                // 木箱碎裂：木屑翻滚 + 尘土
-                for (let i = 0; i < 10; i++) {
+                // 木箱碎裂：大木板抛飞落地弹跳滞留 + 小木屑 + 扬尘
+                const floor = this.y + 16;
+                for (let i = 0; i < 8; i++) {
                     const a = Math.random() * Math.PI * 2;
-                    const speed = 1 + Math.random() * 3;
+                    const speed = 1 + Math.random() * 2.4;
+                    this.particles.push(new Particle(
+                        this.x + (Math.random() - 0.5) * 12,
+                        this.y + (Math.random() - 0.5) * 12,
+                        Math.cos(a) * speed,
+                        -1.5 - Math.random() * 2.6,
+                        Math.random() < 0.5 ? '#c8945a' : '#8c5a22',
+                        110 + ((Math.random() * 60) | 0),
+                        2.2 + Math.random() * 2,
+                        { gravity: 0.18, shape: 'rect', spin: 0.35, floor: floor + Math.random() * 10 }
+                    ));
+                }
+                for (let i = 0; i < 8; i++) {
+                    const a = Math.random() * Math.PI * 2;
+                    const speed = 1.5 + Math.random() * 3;
                     this.particles.push(new Particle(
                         this.x, this.y,
                         Math.cos(a) * speed,
-                        Math.sin(a) * speed - 1.2,
-                        Math.random() < 0.5 ? '#c8945a' : '#8c5a22',
-                        22 + ((Math.random() * 14) | 0),
-                        1.8 + Math.random() * 2,
-                        { gravity: 0.14, shape: 'rect', spin: 0.3 }
+                        -0.8 - Math.random() * 2,
+                        '#e0b476',
+                        40 + ((Math.random() * 24) | 0),
+                        1 + Math.random(),
+                        { gravity: 0.16, shape: 'rect', spin: 0.5, floor: floor + Math.random() * 8 }
                     ));
                 }
                 for (let i = 0; i < 6; i++) {
@@ -500,10 +531,41 @@ class Effect {
                     this.particles.push(new Particle(
                         this.x, this.y,
                         Math.cos(a) * (0.5 + Math.random()),
-                        Math.sin(a) * (0.5 + Math.random()) - 0.4,
+                        Math.sin(a) * (0.5 + Math.random()) - 0.5,
                         'rgba(170, 180, 200, 0.45)',
-                        24 + ((Math.random() * 10) | 0),
+                        30 + ((Math.random() * 14) | 0),
                         2.5 + Math.random() * 2
+                    ));
+                }
+                break;
+            }
+            case 'barrelDebris': {
+                // 油桶炸裂：金属碎片抛飞弹跳 + 燃烧余烬
+                const floor = this.y + 16;
+                for (let i = 0; i < 10; i++) {
+                    const a = Math.random() * Math.PI * 2;
+                    const speed = 2 + Math.random() * 3.5;
+                    this.particles.push(new Particle(
+                        this.x, this.y,
+                        Math.cos(a) * speed,
+                        -1 - Math.random() * 3,
+                        Math.random() < 0.55 ? '#a33b2e' : '#5b6470',
+                        100 + ((Math.random() * 50) | 0),
+                        1.8 + Math.random() * 1.8,
+                        { gravity: 0.2, shape: 'rect', spin: 0.5, floor: floor + Math.random() * 12 }
+                    ));
+                }
+                for (let i = 0; i < 7; i++) {
+                    const a = Math.random() * Math.PI * 2;
+                    const speed = 1 + Math.random() * 2.5;
+                    this.particles.push(new Particle(
+                        this.x, this.y,
+                        Math.cos(a) * speed,
+                        -1.5 - Math.random() * 2,
+                        Math.random() < 0.5 ? '#ff9c42' : '#ffd27f',
+                        45 + ((Math.random() * 35) | 0),
+                        1.4 + Math.random() * 1.4,
+                        { gravity: 0.08, glow: true, floor: floor + Math.random() * 10 }
                     ));
                 }
                 break;
@@ -1357,12 +1419,15 @@ class GameClient {
                 break;
 
             case 'terrainRemove': {
-                // 地形被摧毁：移除方块 + 木箱碎裂特效
+                // 地形被摧毁：移除方块 + 木箱碎裂/油桶金属碎片（碎片落地弹跳并滞留）
                 const ids = message.ids || [];
                 this.terrain = (this.terrain || []).filter(b => !ids.includes(b.id));
                 (message.breaks || []).forEach(p => {
-                    this.effects.push(new Effect(p.x, p.y, 'crateBreak', 700));
+                    this.effects.push(new Effect(p.x, p.y, 'crateBreak', 2600));
                     if (window.gameSound) window.gameSound.crateBreak(this.volFor(p.x, p.y));
+                });
+                (message.barrels || []).forEach(p => {
+                    this.effects.push(new Effect(p.x, p.y, 'barrelDebris', 2600));
                 });
                 break;
             }
@@ -3284,11 +3349,82 @@ class GameClient {
         const ctx = this.backCtx;
         const H = 12;  // 挤出高度
         const R = 6;   // 卡通圆角
+
+        // 油桶：圆柱形危险品桶（红桶身 + 黄黑警示带 + 注油盖）
+        if (block.type === 'barrel') {
+            const cx = block.x + block.width / 2;
+            const cy = block.y + block.height / 2;
+            const r = block.width * 0.44;
+            const topY = cy - H;
+            ctx.save();
+            // 投影
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.30)';
+            ctx.beginPath();
+            ctx.ellipse(cx + 3, cy + r * 0.55, r * 1.02, r * 0.42, 0, 0, Math.PI * 2);
+            ctx.fill();
+            // 桶身侧面（下半圆 + 连接矩形，暗红）
+            ctx.fillStyle = '#7e2a1f';
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI);
+            ctx.lineTo(cx - r, topY);
+            ctx.lineTo(cx + r, topY);
+            ctx.closePath();
+            ctx.fill();
+            // 侧面黄色警示带（横向）
+            ctx.fillStyle = '#e8b02e';
+            ctx.fillRect(cx - r, cy - H * 0.15, r * 2, 5);
+            // 桶顶圆盖（径向渐变红）
+            const topGrad = ctx.createRadialGradient(cx - r * 0.3, topY - r * 0.3, r * 0.2, cx, topY, r);
+            topGrad.addColorStop(0, '#ef6a52');
+            topGrad.addColorStop(1, '#b03a2a');
+            ctx.fillStyle = topGrad;
+            ctx.beginPath();
+            ctx.arc(cx, topY, r, 0, Math.PI * 2);
+            ctx.fill();
+            // 顶面轮圈 + 注油盖
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.30)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(cx, topY, r * 0.72, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.fillStyle = '#8c2f24';
+            ctx.strokeStyle = '#4a150e';
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.arc(cx + r * 0.34, topY - r * 0.2, r * 0.2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            // 顶面警示斜纹（黄底黑纹小标）
+            ctx.fillStyle = '#e8b02e';
+            ctx.beginPath();
+            ctx.roundRect(cx - r * 0.62, topY + r * 0.08, r * 0.85, r * 0.42, 2);
+            ctx.fill();
+            ctx.strokeStyle = '#2b2018';
+            ctx.lineWidth = 1.6;
+            for (let i = 0; i < 3; i++) {
+                const sx = cx - r * 0.52 + i * r * 0.28;
+                ctx.beginPath();
+                ctx.moveTo(sx, topY + r * 0.46);
+                ctx.lineTo(sx + r * 0.16, topY + r * 0.12);
+                ctx.stroke();
+            }
+            // 整体卡通粗描边（桶顶圆 + 侧面轮廓）
+            ctx.strokeStyle = '#4a150e';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.arc(cx, topY, r, Math.PI, 0);
+            ctx.lineTo(cx + r, cy);
+            ctx.arc(cx, cy, r, 0, Math.PI);
+            ctx.lineTo(cx - r, topY);
+            ctx.stroke();
+            ctx.restore();
+            return;
+        }
+
         let top, side, line;
         switch (block.type) {
             case 'rock':   top = '#9aa7c2'; side = '#66738f'; line = '#3a4258'; break;
             case 'crate':  top = '#e0a04c'; side = '#a06a28'; line = '#5c3d14'; break;
-            case 'barrel': top = '#5e79d8'; side = '#3d4f9e'; line = '#28316b'; break;
             default:       top = '#6b7fdd'; side = '#4552a8'; line = '#2b3472'; // wall
         }
         // 侧立面（圆角贴住顶面）
@@ -3323,12 +3459,6 @@ class GameClient {
             ctx.lineTo(block.x + block.width / 2, block.y - H + block.height - 4);
             ctx.moveTo(block.x + 4, block.y - H + block.height / 2);
             ctx.lineTo(block.x + block.width - 4, block.y - H + block.height / 2);
-            ctx.stroke();
-        } else if (block.type === 'barrel') {
-            ctx.strokeStyle = line;
-            ctx.lineWidth = 2.5;
-            ctx.beginPath();
-            ctx.arc(block.x + block.width / 2, block.y - H + block.height / 2, block.width / 3, 0, Math.PI * 2);
             ctx.stroke();
         }
     }
