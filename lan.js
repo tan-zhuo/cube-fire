@@ -67,7 +67,7 @@ function createChannelTransport(dc) {
 
 // ---------- WebRTC 手动信令 ----------
 // 纯局域网直连不需要 STUN/TURN 服务器
-function waitIceComplete(pc, timeoutMs = 2500) {
+function waitIceComplete(pc, timeoutMs = 4000) {
     return new Promise(resolve => {
         if (pc.iceGatheringState === 'complete') return resolve();
         const timer = setTimeout(resolve, timeoutMs);
@@ -84,15 +84,36 @@ function waitIceComplete(pc, timeoutMs = 2500) {
 // 谷歌 STUN 在部分网络（尤其国内）不可达且静默失败；混合多家提高候选收集成功率。
 // 同局域网若路由器禁 mDNS 多播，浏览器的 .local 本地候选无法互相解析，
 // 此时必须依赖 STUN 反射候选 + NAT 回环才能连通——这是"同一WiFi却加不进去"的主因
-const ICE_SERVERS = [
+// TURN 中继兜底：AP 隔离（商场/公司/访客 WiFi 禁止设备互连）时 P2P 完全不通，
+// 只能经公网中继转发。浏览器候选优先级 host > srflx > relay，直连可用时不会走中继。
+// 用的是 metered.ca 公开演示中继，属尽力而为；可用 localStorage('cubefire-ice')
+// 注入自建 ICE 服务器列表（JSON 数组）覆盖，'cubefire-force-relay'='1' 强制走中继（诊断用）
+let ICE_SERVERS = [
     { urls: 'stun:stun.qq.com:3478' },
     { urls: 'stun:stun.miwifi.com:3478' },
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun.cloudflare.com:3478' }
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    {
+        urls: ['turn:a.relay.metered.ca:80', 'turn:a.relay.metered.ca:443', 'turns:a.relay.metered.ca:443?transport=tcp'],
+        username: 'e8dd65b92c62d3e36cafb807',
+        credential: 'uWdWNmkhvyqTEswO'
+    }
 ];
-const RTC_CONFIG = { iceServers: ICE_SERVERS };
-// PeerJS 实例统一配置（信令走 PeerJS 云，ICE 用上面的混合 STUN）
-const PEER_OPTS = { debug: 0, config: { iceServers: ICE_SERVERS, iceCandidatePoolSize: 4 } };
+let FORCE_RELAY = false;
+try {
+    const customIce = JSON.parse(localStorage.getItem('cubefire-ice') || 'null');
+    if (Array.isArray(customIce) && customIce.length) ICE_SERVERS = customIce;
+    FORCE_RELAY = localStorage.getItem('cubefire-force-relay') === '1';
+} catch (e) {}
+const RTC_CONFIG = Object.assign(
+    { iceServers: ICE_SERVERS },
+    FORCE_RELAY ? { iceTransportPolicy: 'relay' } : {}
+);
+// PeerJS 实例统一配置（信令走 PeerJS 云，ICE 用上面的 STUN+TURN 组合）
+const PEER_OPTS = { debug: 0, config: Object.assign(
+    { iceServers: ICE_SERVERS, iceCandidatePoolSize: 4 },
+    FORCE_RELAY ? { iceTransportPolicy: 'relay' } : {}
+) };
 
 // 房主：生成一份邀请码（每个访客一份）
 async function hostCreateInvite() {
@@ -487,6 +508,7 @@ function joinRoomWithCode(code, cb) {
     const MAX_TRIES = 3;
     let settled = false;
     let tries = 0;
+    let iceFails = 0; // ICE failed 次数：≥2 说明 P2P 被网络拦截（AP 隔离等）
     const fail = msg => {
         if (settled) return;
         settled = true;
@@ -526,7 +548,8 @@ function joinRoomWithCode(code, cb) {
                 if (pc && (pc.iceConnectionState === 'failed' || pc.connectionState === 'failed')) {
                     clearInterval(iceWatch);
                     clearTimeout(attemptTimer);
-                    retryOr(() => I18N.t('lb.connFail'));
+                    iceFails++;
+                    retryOr(() => I18N.t(iceFails >= 2 ? 'lb.iceFail' : 'lb.connFail'));
                 }
             }, 500);
             conn.on('open', () => {
