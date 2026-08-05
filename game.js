@@ -197,8 +197,9 @@ class Particle {
 }
 
 // 刀挥动效果类：有轮廓的刀 + 跟随刀身的弧形挥砍拖尾
+// opts.claw = true 时渲染为感染者的三道利爪撕裂（绿色）
 class KnifeSwingEffect {
-    constructor(x, y, targetX, targetY, duration = 340) {
+    constructor(x, y, targetX, targetY, duration = 340, opts = undefined) {
         this.x = x;
         this.y = y;
         this.duration = duration;
@@ -207,6 +208,7 @@ class KnifeSwingEffect {
         this.arcHalf = Math.PI * 0.42; // 单侧挥幅约 75°
         this.knifeLength = 50;         // 与攻击判定范围匹配
         this.progress = 0;
+        this.claw = !!(opts && opts.claw);
     }
 
     update() {
@@ -228,13 +230,19 @@ class KnifeSwingEffect {
         ctx.translate(this.x, this.y);
         ctx.rotate(this.angle);
 
-        // ---- 挥砍拖尾：从起始角扫到刀当前角度的弧形渐变（外缘最亮） ----
+        // ---- 挥砍拖尾：从起始角扫到当前角度的弧形渐变（外缘最亮；爪击为绿色） ----
         const trailFrom = Math.max(startA, curA - 1.6);
         if (curA - trailFrom > 0.02) {
             const grad = ctx.createRadialGradient(0, 0, r * 0.25, 0, 0, r);
-            grad.addColorStop(0, 'rgba(200, 236, 255, 0)');
-            grad.addColorStop(0.72, 'rgba(200, 236, 255, 0.10)');
-            grad.addColorStop(1, 'rgba(228, 246, 255, 0.42)');
+            if (this.claw) {
+                grad.addColorStop(0, 'rgba(140, 255, 170, 0)');
+                grad.addColorStop(0.72, 'rgba(140, 255, 170, 0.12)');
+                grad.addColorStop(1, 'rgba(190, 255, 205, 0.45)');
+            } else {
+                grad.addColorStop(0, 'rgba(200, 236, 255, 0)');
+                grad.addColorStop(0.72, 'rgba(200, 236, 255, 0.10)');
+                grad.addColorStop(1, 'rgba(228, 246, 255, 0.42)');
+            }
             ctx.globalAlpha = fade;
             ctx.fillStyle = grad;
             ctx.beginPath();
@@ -244,12 +252,34 @@ class KnifeSwingEffect {
             ctx.fill();
             // 拖尾外缘亮弧
             ctx.globalAlpha = fade * 0.8;
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+            ctx.strokeStyle = this.claw ? 'rgba(190, 255, 205, 0.6)' : 'rgba(255, 255, 255, 0.55)';
             ctx.lineWidth = 2;
             ctx.lineCap = 'round';
             ctx.beginPath();
             ctx.arc(0, 0, r - 1, trailFrom, curA);
             ctx.stroke();
+        }
+
+        // ---- 爪击：三道平行撕裂痕（无刀体） ----
+        if (this.claw) {
+            ctx.rotate(curA);
+            ctx.globalAlpha = fade;
+            for (const off of [-9, 0, 9]) {
+                // 爪痕主体：根窄尖利的月牙条
+                ctx.fillStyle = 'rgba(220, 255, 230, 0.92)';
+                ctx.beginPath();
+                ctx.moveTo(12, off * 0.35);
+                ctx.quadraticCurveTo(r * 0.62, off - 1.5, r + 2, off * 1.15);
+                ctx.quadraticCurveTo(r * 0.62, off + 2.2, 12, off * 0.35 + 2);
+                ctx.closePath();
+                ctx.fill();
+                // 绿色发光描边
+                ctx.strokeStyle = 'rgba(110, 230, 150, 0.65)';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
+            ctx.restore();
+            return;
         }
 
         // ---- 刀本体（旋转到当前挥动角度） ----
@@ -2600,7 +2630,14 @@ class GameClient {
         const attacker = this.players.get(message.attackerId);
         if (!attacker) return;
 
-        if (window.gameSound) window.gameSound.melee(this.volFor(message.x, message.y));
+        // 感染者近战为利爪撕裂（专属特效与音效）
+        const attackerP = this.players.get(message.attackerId);
+        const isClaw = this.gameConfig && this.gameConfig.GAME_MODE === 'infect' &&
+            attackerP && attackerP.team === 1;
+        if (window.gameSound) {
+            if (isClaw) window.gameSound.claw(this.volFor(message.x, message.y));
+            else window.gameSound.melee(this.volFor(message.x, message.y));
+        }
         if (message.targetId && message.damage > 0) {
             const meleeTarget = this.players.get(message.targetId);
             if (meleeTarget) {
@@ -2620,11 +2657,14 @@ class GameClient {
             this.triggerFlash('#ffffff', 0.12);
         }
 
-        // 添加刀挥动效果（以玩家中心为轴）
+        // 添加挥击效果（以玩家中心为轴；感染者为利爪撕裂）
         const psize = (this.gameConfig && this.gameConfig.PLAYER_SIZE) || 20;
+        const clawAttack = this.gameConfig && this.gameConfig.GAME_MODE === 'infect' &&
+            attacker.team === 1;
         this.knifeSwingEffects.push(new KnifeSwingEffect(
             attacker.x + psize / 2, attacker.y + psize / 2,
-            message.targetX, message.targetY
+            message.targetX, message.targetY,
+            340, { claw: clawAttack }
         ));
 
         // 如果击中了目标，添加额外特效
@@ -3548,21 +3588,29 @@ class GameClient {
             this.backCtx.fill();
         }
 
-        // 卡通眼睛（旋转坐标系里 +x 即朝向）
+        // 卡通眼睛（旋转坐标系里 +x 即朝向；感染者红瞳发光）
         if (player.isAlive) {
+            const zombieEyes = this.gameConfig && this.gameConfig.GAME_MODE === 'infect' && player.team === 1;
             const eyeX = size * 0.14, eyeY = size * 0.2, eyeR = size * 0.17;
             for (const sy of [-1, 1]) {
-                this.backCtx.fillStyle = '#ffffff';
+                this.backCtx.fillStyle = zombieEyes ? '#eaffea' : '#ffffff';
                 this.backCtx.strokeStyle = '#232842';
                 this.backCtx.lineWidth = 1.2;
                 this.backCtx.beginPath();
                 this.backCtx.arc(eyeX, sy * eyeY, eyeR, 0, Math.PI * 2);
                 this.backCtx.fill();
                 this.backCtx.stroke();
-                this.backCtx.fillStyle = '#232842';
+                if (zombieEyes) {
+                    this.backCtx.fillStyle = '#e03131';
+                    this.backCtx.shadowColor = '#ff5d5d';
+                    this.backCtx.shadowBlur = 5;
+                } else {
+                    this.backCtx.fillStyle = '#232842';
+                }
                 this.backCtx.beginPath();
                 this.backCtx.arc(eyeX + eyeR * 0.42, sy * eyeY, eyeR * 0.5, 0, Math.PI * 2);
                 this.backCtx.fill();
+                this.backCtx.shadowBlur = 0;
             }
         } else {
             // 阵亡：×× 眼
@@ -3579,10 +3627,50 @@ class GameClient {
             }
         }
         
-        // 枪械外观（随武器变化）
+        // 感染者：僵尸前爪替代枪械 + 身上疤痕
+        const isZombie = this.gameConfig && this.gameConfig.GAME_MODE === 'infect' &&
+            player.team === 1 && player.isAlive;
+        if (isZombie) {
+            // 疤痕缝线
+            this.backCtx.strokeStyle = 'rgba(15, 55, 30, 0.85)';
+            this.backCtx.lineWidth = 1.3;
+            this.backCtx.beginPath();
+            this.backCtx.moveTo(-size * 0.3, -size * 0.05);
+            this.backCtx.lineTo(-size * 0.05, -size * 0.18);
+            this.backCtx.stroke();
+            for (const t of [0.25, 0.55, 0.8]) {
+                const sx = -size * 0.3 + (size * 0.25) * t;
+                const sy = -size * 0.05 - (size * 0.13) * t;
+                this.backCtx.beginPath();
+                this.backCtx.moveTo(sx - 1.5, sy - 1.8);
+                this.backCtx.lineTo(sx + 1.5, sy + 1.8);
+                this.backCtx.stroke();
+            }
+            // 两只前爪（爪掌 + 三根白爪尖）
+            for (const sy of [-1, 1]) {
+                const hx = size / 2 - 1, hy = sy * size * 0.28;
+                this.backCtx.fillStyle = '#1e4d2b';
+                this.backCtx.beginPath();
+                this.backCtx.arc(hx, hy, 3.4, 0, Math.PI * 2);
+                this.backCtx.fill();
+                this.backCtx.strokeStyle = '#d9ffe3';
+                this.backCtx.lineWidth = 1.4;
+                this.backCtx.lineCap = 'round';
+                for (const k of [-1, 0, 1]) {
+                    this.backCtx.beginPath();
+                    this.backCtx.moveTo(hx + 2, hy + k * 2.1);
+                    this.backCtx.lineTo(hx + 7, hy + k * 2.8);
+                    this.backCtx.stroke();
+                }
+            }
+        }
+
+        // 枪械外观（随武器变化；感染者无枪）
         const wIdx = player.weapon || 0;
         this.backCtx.fillStyle = '#e8edf5';
-        if (wIdx === 1) {
+        if (isZombie) {
+            // 已画爪，跳过枪械
+        } else if (wIdx === 1) {
             // 冲锋枪：短枪管 + 下挂弹匣
             this.backCtx.fillRect(size / 2 - 2, -2, 8, 4);
             this.backCtx.fillStyle = '#9aa4b4';

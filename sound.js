@@ -184,6 +184,13 @@ class SoundFX {
         this.noise(0.14, 400, 3800, 0.35 * vol, 0, 'bandpass');
     }
 
+    claw(vol = 1) { // 利爪撕裂：三连快挥 + 低吼
+        this.noise(0.07, 900, 4200, 0.28 * vol, 0, 'bandpass');
+        this.noise(0.07, 1100, 4800, 0.24 * vol, 0.05, 'bandpass');
+        this.noise(0.09, 800, 3600, 0.26 * vol, 0.1, 'bandpass');
+        this.tone('sawtooth', 95, 55, 0.22, 0.16 * vol);
+    }
+
     wallHit(vol = 1) {
         this.noise(0.04, 1800, 300, 0.24 * vol);
     }
