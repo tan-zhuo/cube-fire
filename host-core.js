@@ -1975,6 +1975,21 @@ function compressMessage(message) {
 }
 
 
+// buff 状态扁平化（替代每 tick 的 JSON.stringify 深比较，60Hz 下开销显著）
+function flattenPowerups(p) {
+    if (!p) return null;
+    return {
+        sA: !!(p.shield && p.shield.active), sE: (p.shield && p.shield.endTime) | 0,
+        rA: !!(p.rapidFire && p.rapidFire.active), rE: (p.rapidFire && p.rapidFire.endTime) | 0,
+        dA: !!(p.damageBoost && p.damageBoost.active), dE: (p.damageBoost && p.damageBoost.endTime) | 0
+    };
+}
+
+function powerupsFlatEqual(a, b) {
+    if (!a || !b) return a === b;
+    return a.sA === b.sA && a.sE === b.sE && a.rA === b.rA && a.rE === b.rE && a.dA === b.dA && a.dE === b.dE;
+}
+
 // 检查玩家状态是否发生变化
 function hasPlayerChanged(playerId, currentPlayer) {
     const lastState = gameState.lastPlayerStates.get(playerId);
@@ -1992,7 +2007,7 @@ function hasPlayerChanged(playerId, currentPlayer) {
         currentPlayer.reserve !== lastState.reserve ||
         currentPlayer.reloading !== lastState.reloading ||
         currentPlayer.grenades !== lastState.grenades ||
-        JSON.stringify(currentPlayer.powerups) !== JSON.stringify(lastState.powerups)
+        !powerupsFlatEqual(flattenPowerups(currentPlayer.powerups), lastState.powerupsFlat)
     );
 }
 
@@ -2079,8 +2094,8 @@ function generateIncrementalUpdate() {
                 if (player.score !== lastState.score) changes.score = player.score;
                 if (player.isAlive !== lastState.isAlive) changes.isAlive = player.isAlive;
 
-                // 检查powerups变化
-                const powerupsChanged = JSON.stringify(player.powerups) !== JSON.stringify(lastState.powerups);
+                // 检查powerups变化（扁平比较）
+                const powerupsChanged = !powerupsFlatEqual(flattenPowerups(player.powerups), lastState.powerupsFlat);
                 if (powerupsChanged) changes.powerups = player.powerups;
 
                 // 检查武器/弹药变化
@@ -2130,7 +2145,7 @@ function generateIncrementalUpdate() {
                 reserve: player.reserve,
                 reloading: player.reloading,
                 grenades: player.grenades,
-                powerups: JSON.parse(JSON.stringify(player.powerups))
+                powerupsFlat: flattenPowerups(player.powerups)
             });
         }
     });
@@ -3786,15 +3801,38 @@ function updateGameLogic() {
 }
 
 // 网络状态推送函数（独立于游戏逻辑）
+let _lastFullAt = 0;
+let _lastHeartbeatAt = 0;
+let _lastActivityAt = Date.now();
+
 function broadcastGameState() {
     // 结果展示阶段不推送位置状态，减少无意义数据
     if (gameState.showingResults) return;
 
     // 生成更新（增量或完整）
     const update = generateIncrementalUpdate();
+    const now = Date.now();
     if (update && update.type === 'incrementalUpdate') {
+        const hasContent = !!(update.newPlayers || update.changedPlayers || update.newBullets ||
+            update.removedBullets || update.newPowerups || update.removedPowerups);
+        if (hasContent) {
+            _lastActivityAt = now;
+        } else {
+            // 空增量仅作计时心跳：500ms 一次（把空闲期 60 包/秒压到 2 包/秒）
+            if (now - _lastHeartbeatAt < 500) {
+                gameState.updateCounter++;
+                return;
+            }
+            _lastHeartbeatAt = now;
+        }
         broadcast(update, null, 3);
     } else {
+        // 空闲期把全量对账降频到 2 秒一次
+        if (now - _lastActivityAt > 1200 && now - _lastFullAt < 2000) {
+            gameState.updateCounter++;
+            return;
+        }
+        _lastFullAt = now;
         broadcast({ type: 'gameUpdate' }, null, 3);
     }
     gameState.updateCounter++;

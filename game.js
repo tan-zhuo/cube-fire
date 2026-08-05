@@ -2168,7 +2168,7 @@ class GameClient {
         this._streakBannerTimer = setTimeout(() => { el.className = ''; }, 2600);
     }
 
-    // 弹药 HUD（每帧刷新）
+    // 弹药 HUD（每帧调用，脏检查后才写 DOM）
     updateAmmoHUD() {
         const nameEl = document.getElementById('weaponName');
         const magEl = document.getElementById('ammoMag');
@@ -2176,6 +2176,13 @@ class GameClient {
         if (!nameEl || !magEl || !resEl || !this.playerId) return;
         const me = this.players.get(this.playerId);
         if (!me) return;
+
+        // 脏检查：状态签名未变则跳过 DOM 写入（换弹进度条例外，进行中每帧刷新）
+        const now0 = Date.now();
+        const reloading0 = !!(me.reloadEnd && me.reloadEnd > now0);
+        const sig = `${me.weapon}|${me.mag}|${me.reserve}|${reloading0}|${me.grenades}|${me.team}`;
+        if (!reloading0 && this._lastAmmoSig === sig) return;
+        this._lastAmmoSig = sig;
         // 机甲：无限弹药 + 火箭
         if (me.weapon === 5) {
             nameEl.textContent = '机甲';
@@ -2504,6 +2511,8 @@ class GameClient {
         const timerElement = document.getElementById('timerValue');
         if (!timerElement) return;
         const seconds = Math.max(0, Math.ceil(remainingTime / 1000));
+        if (this._lastTimerSec === seconds) return; // 秒数没变不碰 DOM
+        this._lastTimerSec = seconds;
         const m = Math.floor(seconds / 60);
         const s = seconds % 60;
         timerElement.textContent = `${m}:${String(s).padStart(2, '0')}`;
@@ -3411,7 +3420,29 @@ class GameClient {
     }
 
     // 2.5D 地形块：顶面上移 + 侧立面，营造高度感
+    // 地形块按类型预渲染成贴图（每帧 drawImage 替代几十次渐变+路径构建），
+    // 块级缓存保留画家算法的前后遮挡排序
     drawTerrainBlock(block) {
+        const PAD = 8, H = 12;
+        this._terrainSprites = this._terrainSprites || {};
+        const key = `${block.type}_${block.width}x${block.height}`;
+        let sprite = this._terrainSprites[key];
+        if (!sprite) {
+            sprite = document.createElement('canvas');
+            sprite.width = block.width + PAD * 2;
+            sprite.height = block.height + H + PAD * 2;
+            const sctx = sprite.getContext('2d');
+            sctx.translate(PAD, PAD + H);
+            const saved = this.backCtx;
+            this.backCtx = sctx;
+            this._drawTerrainBlockRaw({ x: 0, y: 0, width: block.width, height: block.height, type: block.type });
+            this.backCtx = saved;
+            this._terrainSprites[key] = sprite;
+        }
+        this.backCtx.drawImage(sprite, block.x - PAD, block.y - H - PAD);
+    }
+
+    _drawTerrainBlockRaw(block) {
         const ctx = this.backCtx;
         const H = 12;  // 挤出高度
         const R = 6;   // 卡通圆角
