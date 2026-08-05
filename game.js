@@ -396,6 +396,7 @@ class Effect {
                 else if (this.weapon === 'smg') { count = 5; cone = 0.5; }
                 else if (this.weapon === 'sniper') { count = 8; cone = 0.28; speedMul = 1.7; }
                 else if (this.weapon === 'rpg') { count = 11; cone = 0.85; speedMul = 1.2; }
+                else if (this.weapon === 'mech') { count = 8; cone = 0.5; speedMul = 1.3; }
                 for (let i = 0; i < count; i++) {
                     const a = dir + (Math.random() - 0.5) * cone;
                     const speed = (2.5 + Math.random() * 3.5) * speedMul;
@@ -537,6 +538,23 @@ class Effect {
                         2.5 + Math.random() * 2
                     ));
                 }
+                break;
+            }
+            case 'mechLand': {
+                // 机甲落地：径向尘环冲击
+                for (let i = 0; i < 16; i++) {
+                    const a = (i / 16) * Math.PI * 2;
+                    const speed = 2 + Math.random() * 2;
+                    this.particles.push(new Particle(
+                        this.x, this.y + 8,
+                        Math.cos(a) * speed,
+                        Math.sin(a) * speed * 0.4 - 0.3,
+                        'rgba(180, 190, 210, 0.6)',
+                        24 + ((Math.random() * 14) | 0),
+                        2.5 + Math.random() * 2.5
+                    ));
+                }
+                this.particles.push(new Particle(this.x, this.y, 0, 0, '#ffffff', 6, 14, { glow: true }));
                 break;
             }
             case 'barrelDebris': {
@@ -1437,6 +1455,37 @@ class GameClient {
                 if (Array.isArray(message.terrain)) this.terrain = message.terrain;
                 break;
 
+            case 'heliDrop':
+                // 武装直升机进场（飞行动画 + 旋翼声）
+                this.heliAnim = { dropX: message.x, dropY: message.y, startAt: Date.now() };
+                if (window.gameSound) window.gameSound.heli();
+                break;
+
+            case 'mechSpawn':
+                this.fieldMech = { x: message.x, y: message.y };
+                this.effects.push(new Effect(message.x, message.y, 'mechLand', 700));
+                this.addShake(6);
+                if (window.gameSound) window.gameSound.mechLand(this.volFor(message.x, message.y));
+                break;
+
+            case 'mechEnter':
+                this.fieldMech = null;
+                if (message.playerId === this.playerId && window.gameSound) window.gameSound.pickup();
+                break;
+
+            case 'mechHp': {
+                const mp = this.players.get(message.playerId);
+                if (mp) mp.mechHp = message.hp;
+                break;
+            }
+
+            case 'mechDestroyed':
+                // 机甲殉爆：超大爆炸 + 金属残骸（AOE 爆炸由服务器 explosion 消息另行呈现）
+                this.effects.push(new Effect(message.x, message.y, 'explosion', 900, { radius: 130 }));
+                this.effects.push(new Effect(message.x, message.y, 'barrelDebris', 2600));
+                this.addShake(10);
+                break;
+
             case 'explosion': {
                 // 爆炸：视效 + 声音 + 距离衰减震屏
                 this.effects.push(new Effect(message.x, message.y, 'explosion', 750, {
@@ -2127,6 +2176,18 @@ class GameClient {
         if (!nameEl || !magEl || !resEl || !this.playerId) return;
         const me = this.players.get(this.playerId);
         if (!me) return;
+        // 机甲：无限弹药 + 火箭
+        if (me.weapon === 5) {
+            nameEl.textContent = '机甲';
+            magEl.textContent = '∞';
+            resEl.textContent = '';
+            const tk5 = document.getElementById('reloadTrack');
+            if (tk5) tk5.classList.add('hidden');
+            const gz5 = document.getElementById('grenadeCount');
+            if (gz5) gz5.textContent = '火箭 ∞';
+            return;
+        }
+
         // 感染者：显示利爪，无弹药/手雷概念
         if (this.gameConfig && this.gameConfig.GAME_MODE === 'infect' && me.team === 1) {
             nameEl.textContent = '感染者';
@@ -3128,8 +3189,9 @@ class GameClient {
         // 感染者没有手雷
         if (this.gameConfig && this.gameConfig.GAME_MODE === 'infect' && me.team === 1) return;
         const now = Date.now();
-        if (now - (this.lastGrenadeSent || 0) < 1000) return;
-        if ((me.grenades | 0) <= 0) {
+        const inMech = me.weapon === 5;
+        if (now - (this.lastGrenadeSent || 0) < (inMech ? 1600 : 1000)) return;
+        if (!inMech && (me.grenades | 0) <= 0) {
             this.lastGrenadeSent = now;
             if (window.gameSound) window.gameSound.emptyClick();
             return;
@@ -3140,8 +3202,12 @@ class GameClient {
         enc.writeFloat32(this.mouse.x);
         enc.writeFloat32(this.mouse.y);
         this.ws.send(enc.getBuffer());
-        me.grenades = Math.max(0, (me.grenades | 0) - 1); // 本地预测
-        if (window.gameSound) window.gameSound.grenadeThrow(1);
+        if (inMech) {
+            if (window.gameSound) window.gameSound.shoot(1, 'rpg'); // 机甲火箭发射音
+        } else {
+            me.grenades = Math.max(0, (me.grenades | 0) - 1); // 本地预测
+            if (window.gameSound) window.gameSound.grenadeThrow(1);
+        }
     }
 
     sendReload() {
@@ -3520,6 +3586,9 @@ class GameClient {
             else this.drawPlayer(item.o);
         });
 
+        // 场上待驾驶的机甲
+        this.drawFieldMech();
+
         // 绘制烟迹/尘土（垫在子弹下层）
         this.trailParticles.forEach(p => p.draw(this.backCtx));
 
@@ -3545,6 +3614,9 @@ class GameClient {
 
         // 角色头顶聊天气泡
         this.players.forEach(p => this.drawChatBubble(p));
+
+        // 武装直升机（高空层，最上方）
+        this.drawHeli();
 
         this.backCtx.restore();
 
@@ -3582,8 +3654,258 @@ class GameClient {
         }
     }
 
+    // 机甲本体（旋转坐标系内绘制，+x 为朝向；s 为机甲边长约 40）
+    drawMechBody(ctx, s, color) {
+        const O = '#1c2133'; // 轮廓色
+        // 双足（后侧两只脚垫）
+        ctx.fillStyle = '#2c3350';
+        for (const sy of [-1, 1]) {
+            ctx.beginPath();
+            ctx.roundRect(-s * 0.42, sy * s * 0.22 - s * 0.09, s * 0.2, s * 0.18, 4);
+            ctx.fill();
+        }
+        // 主躯干（宽体装甲）
+        const grad = ctx.createLinearGradient(0, -s / 2, 0, s / 2);
+        grad.addColorStop(0, this._shade(color, 30));
+        grad.addColorStop(1, this._shade(color, -22));
+        ctx.fillStyle = grad;
+        ctx.strokeStyle = O;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.roundRect(-s * 0.38, -s * 0.36, s * 0.72, s * 0.72, 8);
+        ctx.fill();
+        ctx.stroke();
+        // 肩部装甲块（两侧越肩大块）
+        ctx.fillStyle = this._shade(color, -10);
+        for (const sy of [-1, 1]) {
+            ctx.beginPath();
+            ctx.roundRect(-s * 0.3, sy * s * 0.34 - (sy > 0 ? 0 : s * 0.16), s * 0.42, s * 0.16, 5);
+            ctx.fill();
+            ctx.stroke();
+        }
+        // 左肩火箭巢（-y 侧）：盒体 + 2x2 发射孔
+        ctx.fillStyle = '#3a4256';
+        ctx.beginPath();
+        ctx.roundRect(-s * 0.06, -s * 0.56, s * 0.3, s * 0.18, 4);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#12151f';
+        for (const ox of [0.02, 0.16]) {
+            for (const oy of [-0.52, -0.45]) {
+                ctx.beginPath();
+                ctx.arc(s * ox, s * oy, s * 0.03, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        // 右臂加特林（+y 侧）：臂座 + 三管
+        ctx.fillStyle = '#3a4256';
+        ctx.beginPath();
+        ctx.roundRect(s * 0.08, s * 0.3, s * 0.24, s * 0.18, 4);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#aab4c8';
+        for (const oy of [0.32, 0.38, 0.44]) {
+            ctx.fillRect(s * 0.3, s * oy, s * 0.36, s * 0.045);
+        }
+        ctx.strokeStyle = O;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(s * 0.3, s * 0.31, s * 0.36, s * 0.15);
+        // 驾驶舱圆顶（青色玻璃）
+        const dome = ctx.createRadialGradient(s * 0.02, -s * 0.04, 1, s * 0.06, 0, s * 0.17);
+        dome.addColorStop(0, '#c9f3ff');
+        dome.addColorStop(0.5, '#5bc9e8');
+        dome.addColorStop(1, '#1d7ea3');
+        ctx.fillStyle = dome;
+        ctx.strokeStyle = O;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(s * 0.06, 0, s * 0.16, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+    }
+
+    // 场上待驾驶的机甲
+    drawFieldMech() {
+        if (!this.fieldMech) return;
+        const ctx = this.backCtx;
+        const m = this.fieldMech;
+        const s = 40;
+        const time = Date.now();
+        ctx.save();
+        // 脉冲光圈（可驾驶提示）
+        const pulse = 0.35 + Math.sin(time * 0.005) * 0.2;
+        ctx.globalAlpha = pulse;
+        ctx.strokeStyle = '#7ee0ff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.ellipse(m.x, m.y + s * 0.42, s * 0.85, s * 0.32, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        // 投影
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.ellipse(m.x, m.y + s * 0.42, s * 0.6, s * 0.22, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.translate(m.x, m.y);
+        this.drawMechBody(ctx, s, '#8a93a5'); // 无人驾驶：灰色
+        ctx.restore();
+        // 提示文字
+        ctx.save();
+        ctx.font = 'bold 11px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#7ee0ff';
+        ctx.globalAlpha = 0.6 + Math.sin(time * 0.005) * 0.3;
+        ctx.fillText('空投机甲 · 靠近驾驶', m.x, m.y - s * 0.72);
+        ctx.restore();
+    }
+
+    // 武装直升机（2.5D：机身高空飞行，影子投在地面）
+    drawHeli() {
+        if (!this.heliAnim) return;
+        const ctx = this.backCtx;
+        const h = this.heliAnim;
+        const p = (Date.now() - h.startAt) / 3500;
+        if (p >= 1) { this.heliAnim = null; return; }
+        const hx = -90 + p * (this.canvas.width + 180);
+        const hy = h.dropY - 96 + Math.sin(p * 14) * 4; // 高空飞行 + 轻微颠簸
+        const rot = Date.now() * 0.06;
+
+        ctx.save();
+        // 地面影子（与机身分离表现高度）
+        ctx.globalAlpha = 0.22;
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.ellipse(hx + 26, h.dropY + 4, 34, 9, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+
+        ctx.translate(hx, hy);
+        // 尾梁 + 垂尾
+        ctx.fillStyle = '#3f4b3a';
+        ctx.strokeStyle = '#1e241c';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(-46, -4, 26, 7, 3);
+        ctx.fill();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.roundRect(-50, -12, 7, 14, 2);
+        ctx.fill();
+        ctx.stroke();
+        // 尾桨（快速旋转的短线）
+        ctx.strokeStyle = 'rgba(220, 228, 235, 0.7)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-47 + Math.cos(rot * 1.6) * 7, -5 + Math.sin(rot * 1.6) * 7);
+        ctx.lineTo(-47 - Math.cos(rot * 1.6) * 7, -5 - Math.sin(rot * 1.6) * 7);
+        ctx.stroke();
+        // 机身
+        const body = ctx.createLinearGradient(0, -10, 0, 10);
+        body.addColorStop(0, '#5d6d50');
+        body.addColorStop(1, '#3f4b3a');
+        ctx.fillStyle = body;
+        ctx.strokeStyle = '#1e241c';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.roundRect(-24, -11, 52, 22, 10);
+        ctx.fill();
+        ctx.stroke();
+        // 舱窗
+        ctx.fillStyle = '#8fdcf2';
+        ctx.beginPath();
+        ctx.roundRect(10, -8, 14, 9, 4);
+        ctx.fill();
+        ctx.strokeStyle = '#1e241c';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // 侧挂武器短舱
+        ctx.fillStyle = '#2c3529';
+        ctx.fillRect(-8, 9, 18, 4);
+        ctx.strokeRect(-8, 9, 18, 4);
+        // 起落橇
+        ctx.strokeStyle = '#1e241c';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-14, 13);
+        ctx.lineTo(22, 13);
+        ctx.stroke();
+        // 主旋翼（旋转模糊：转盘 + 两道扫线）
+        ctx.globalAlpha = 0.13;
+        ctx.fillStyle = '#dfe8ef';
+        ctx.beginPath();
+        ctx.ellipse(2, -14, 44, 7, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 0.5;
+        ctx.strokeStyle = '#dfe8ef';
+        ctx.lineWidth = 2.5;
+        for (const ph of [0, Math.PI / 2]) {
+            ctx.beginPath();
+            ctx.moveTo(2 + Math.cos(rot + ph) * 44, -14 + Math.sin(rot + ph) * 7);
+            ctx.lineTo(2 - Math.cos(rot + ph) * 44, -14 - Math.sin(rot + ph) * 7);
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+
+    // 驾驶机甲的玩家（体型 2 倍、装甲条、独立造型）
+    drawMechPlayer(player) {
+        const ctx = this.backCtx;
+        const base = this.gameConfig ? this.gameConfig.PLAYER_SIZE : 20;
+        const s = base * 2;
+        const cx = player.x + base / 2;
+        const cy = player.y + base / 2;
+
+        // 大投影
+        ctx.save();
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.ellipse(cx, cy + s * 0.42, s * 0.62, s * 0.24, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // 本体
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(player.angle || 0);
+        // 受击白闪
+        this.drawMechBody(ctx, s, player.color || '#3498db');
+        if (player.hitFlashUntil && player.hitFlashUntil > Date.now()) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+            ctx.beginPath();
+            ctx.roundRect(-s * 0.38, -s * 0.36, s * 0.72, s * 0.72, 8);
+            ctx.fill();
+        }
+        ctx.restore();
+
+        // 装甲条（橙色，宽于普通血条）
+        const hp = player.mechHp !== undefined ? player.mechHp : 400;
+        const bw = s * 1.1;
+        ctx.save();
+        ctx.fillStyle = 'rgba(20, 26, 48, 0.75)';
+        ctx.fillRect(cx - bw / 2, cy - s * 0.72, bw, 5);
+        ctx.fillStyle = '#ffb020';
+        ctx.fillRect(cx - bw / 2, cy - s * 0.72, bw * Math.max(0, hp / 400), 5);
+        ctx.strokeStyle = 'rgba(20, 26, 48, 0.9)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(cx - bw / 2, cy - s * 0.72, bw, 5);
+        // 昵称
+        ctx.fillStyle = player.team === 1 ? '#ffb0a3' : player.team === 2 ? '#a8d4f7' : '#ffffff';
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(player.nickname, cx, cy - s * 0.82);
+        ctx.restore();
+    }
+
     drawPlayer(player) {
         const size = this.gameConfig ? this.gameConfig.PLAYER_SIZE : 20;
+
+        // 驾驶机甲：独立绘制路径（体型 2 倍）
+        if (player.weapon === 5 && player.isAlive) {
+            this.drawMechPlayer(player);
+            return;
+        }
 
         // 队伍标识环（分队/感染模式下在脚底画阵营色椭圆环）
         if (player.isAlive && (player.team === 1 || player.team === 2)) {

@@ -81,9 +81,15 @@ const WEAPONS = {
     smg:     { name: '冲锋枪', damage: 12, fireRate: 90,   magSize: 40, reloadMs: 1600, pellets: 1, spread: 0.09, speed: 11, reserve: 80,  lifeMs: 2000 },
     shotgun: { name: '霰弹枪', damage: 11, fireRate: 750,  magSize: 6,  reloadMs: 2200, pellets: 6, spread: 0.34, speed: 9,  reserve: 24,  lifeMs: 450 },
     sniper:  { name: '狙击枪', damage: 100, fireRate: 1100, magSize: 5,  reloadMs: 2400, pellets: 1, spread: 0,    speed: 12, reserve: 10,  lifeMs: 2000 }, // 无护盾满血一枪带走
-    rpg:     { name: '火箭筒', damage: 85, fireRate: 1500, magSize: 1,  reloadMs: 2500, pellets: 1, spread: 0,    speed: 7,  reserve: 4,   lifeMs: 2200, kind: 1, blastRadius: 90 }
+    rpg:     { name: '火箭筒', damage: 85, fireRate: 1500, magSize: 1,  reloadMs: 2500, pellets: 1, spread: 0,    speed: 7,  reserve: 4,   lifeMs: 2200, kind: 1, blastRadius: 90 },
+    mech:    { name: '机甲', damage: 14, fireRate: 70, magSize: 255, reloadMs: 0, pellets: 1, spread: 0.06, speed: 11, reserve: -1, lifeMs: 2000, infinite: true } // 机甲加特林（仅驾驶时装备）
 };
-const WEAPON_IDS = ['rifle', 'smg', 'shotgun', 'sniper', 'rpg']; // uint8 索引编码
+const WEAPON_IDS = ['rifle', 'smg', 'shotgun', 'sniper', 'rpg', 'mech']; // uint8 索引编码
+
+// 机甲参数：空投间隔、装甲值、火箭配置
+const MECH = { armor: 400, rocketCooldown: 1600, rocketDamage: 80, rocketRadius: 90, dropIntervalMs: 50000 };
+let fieldMech = null;          // 场上待驾驶的机甲 {id, x, y}
+let lastMechEvent = Date.now(); // 上次空投时间（开局延迟首投）
 
 // 手雷参数
 const GRENADE = { blastRadius: 100, blastDamage: 75, speed: 8, maxThrow: 320, fuseMs: 1300, cooldownMs: 1000, carry: 2, carryMax: 4 };
@@ -1104,6 +1110,14 @@ class Player {
             damage = Math.floor(damage * 0.5);
         }
 
+        // 机甲装甲：全部伤害由装甲吸收，打空后机甲爆炸、驾驶员弹出
+        if (this.mech) {
+            this.mech.hp -= damage;
+            broadcast({ type: 'mechHp', playerId: this.id, hp: Math.max(0, this.mech.hp) });
+            if (this.mech.hp <= 0) destroyMechFor(this);
+            return;
+        }
+
         this.health -= damage;
         if (this.health <= 0) {
             this.isAlive = false;
@@ -1137,7 +1151,7 @@ class Player {
         if (!this.canShoot()) return null;
 
         this.lastShot = Date.now();
-        this.mag--;
+        if (!WEAPONS[this.weapon].infinite) this.mag--;
 
         // 计算子弹方向
         const centerX = this.x + GAME_CONFIG.PLAYER_SIZE / 2;
@@ -1195,8 +1209,8 @@ class Player {
             ));
         }
 
-        // 打完最后一发自动换弹
-        if (this.mag <= 0) this.startReload();
+        // 打完最后一发自动换弹（无限弹武器除外）
+        if (!w.infinite && this.mag <= 0) this.startReload();
 
         return bullets;
     }
@@ -2472,7 +2486,23 @@ function handleMessage(ws, message) {
         }
         case 'grenade': {
             const gp = gameState.players.get(ws.playerId);
-            if (gp) {
+            if (gp && gp.mech) {
+                // 机甲：G 键发射无限火箭（独立冷却）
+                const nowG = Date.now();
+                if (gp.isAlive && nowG - (gp.lastGrenade || 0) >= MECH.rocketCooldown) {
+                    gp.lastGrenade = nowG;
+                    const cx = gp.x + GAME_CONFIG.PLAYER_SIZE / 2;
+                    const cy = gp.y + GAME_CONFIG.PLAYER_SIZE / 2;
+                    let dx = message.targetX - cx, dy = message.targetY - cy;
+                    const dist = Math.hypot(dx, dy) || 1;
+                    gameState.bullets.push(new Bullet(
+                        cx + (dx / dist) * 26, cy + (dy / dist) * 26,
+                        (dx / dist) * 8, (dy / dist) * 8,
+                        gp.id, MECH.rocketDamage, 2200,
+                        { kind: 1, blastRadius: MECH.rocketRadius, blastDamage: MECH.rocketDamage, weaponName: '机甲火箭' }
+                    ));
+                }
+            } else if (gp) {
                 const g = gp.throwGrenade(message.targetX, message.targetY);
                 if (g) gameState.bullets.push(g);
             }
@@ -2522,12 +2552,31 @@ function handleMessage(ws, message) {
                 if (cmdText.startsWith('/weapon')) {
                     const arg = cmdText.slice(7).trim().toLowerCase();
                     let content;
+                    if (arg === 'mech') {
+                        content = '机甲只能通过直升机空投获取';
+                        broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, timestamp: Date.now() });
+                        break;
+                    }
                     if (WEAPONS[arg]) {
                         chatPlayer.equipWeapon(arg);
                         content = `${chatPlayer.nickname} 换上了「${WEAPONS[arg].name}」`;
                     } else {
                         const list = WEAPON_IDS.map(k => `${k}=${WEAPONS[k].name}`).join('，');
                         content = `可用武器: ${list}。输入 /weapon 武器ID 切换`;
+                    }
+                    broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, timestamp: Date.now() });
+                    break;
+                }
+                // 机甲指令：/mech 立即召唤直升机空投
+                if (cmdText === '/mech') {
+                    let hasPilot = false;
+                    gameState.players.forEach(p => { if (p.mech) hasPilot = true; });
+                    let content;
+                    if (fieldMech || hasPilot) {
+                        content = '场上已有机甲，摧毁后才能再次空投';
+                    } else {
+                        lastMechEvent = 0; // 下个 tick 立即触发空投
+                        content = '武装直升机正在赶来...';
                     }
                     broadcast({ type: 'chatMessage', playerId: 0, playerName: '系统', content, timestamp: Date.now() });
                     break;
@@ -2662,6 +2711,11 @@ function handleJoin(ws, message) {
             grenades: joinWs.g
         }
     }, playerId);
+
+    // 补发场上机甲状态
+    if (fieldMech) {
+        try { ws.send(JSON.stringify({ type: 'mechSpawn', x: fieldMech.x, y: fieldMech.y })); } catch (e) {}
+    }
 
     // 发送当前游戏完整状态（二进制）
     try {
@@ -3095,6 +3149,76 @@ function checkPowerupPickup() {
     });
 }
 
+// ===================== 机甲空投 =====================
+// 武装直升机定期空投一台机甲：走上去驾驶，装备无限加特林+无限火箭，
+// 400 装甲吸收伤害，2 倍受弹判定，装甲打空原地爆炸波及四周
+function mechTick(now) {
+    // 已有场上机甲或有人在驾驶则不空投
+    let hasPilot = false;
+    gameState.players.forEach(p => { if (p.mech) hasPilot = true; });
+
+    // 驾驶检测：活着的玩家走近场上机甲即进入（感染者除外）
+    if (fieldMech) {
+        let entered = null;
+        gameState.players.forEach(p => {
+            if (entered || !p.isAlive || p.mech) return;
+            if (matchConfig.infectMode && p.team === 1) return;
+            const d = Math.hypot(p.x + GAME_CONFIG.PLAYER_SIZE / 2 - fieldMech.x,
+                                 p.y + GAME_CONFIG.PLAYER_SIZE / 2 - fieldMech.y);
+            if (d < 34) entered = p;
+        });
+        if (entered) {
+            entered.mech = { hp: MECH.armor };
+            entered.weapon = 'mech';
+            entered.mag = 255;
+            entered.reserve = -1;
+            entered.reloading = false;
+            entered.x = fieldMech.x - GAME_CONFIG.PLAYER_SIZE / 2;
+            entered.y = fieldMech.y - GAME_CONFIG.PLAYER_SIZE / 2;
+            fieldMech = null;
+            broadcast({ type: 'mechEnter', playerId: entered.id });
+            broadcast({
+                type: 'chatMessage', playerId: 0, playerName: '系统',
+                content: `${entered.nickname} 驾驶了机甲！火力全开`, timestamp: Date.now()
+            });
+        }
+        return;
+    }
+
+    if (hasPilot || now - lastMechEvent < MECH.dropIntervalMs) return;
+    if (gameState.isGameEnded) return;
+
+    // 触发空投：直升机 2.2s 后飞抵投放点
+    lastMechEvent = now;
+    const spot = findSpawnPosition(0, -1);
+    const dropX = spot.x + GAME_CONFIG.PLAYER_SIZE / 2;
+    const dropY = spot.y + GAME_CONFIG.PLAYER_SIZE / 2;
+    broadcast({ type: 'heliDrop', x: dropX, y: dropY });
+    setTimeout(() => {
+        if (gameState.isGameEnded) return;
+        fieldMech = { id: Date.now(), x: dropX, y: dropY };
+        broadcast({ type: 'mechSpawn', x: dropX, y: dropY });
+        broadcast({
+            type: 'chatMessage', playerId: 0, playerName: '系统',
+            content: '武装直升机空投了一台机甲！先到先得', timestamp: Date.now()
+        });
+    }, 2200);
+}
+
+function destroyMechFor(player) {
+    player.mech = null;
+    const cx = player.x + GAME_CONFIG.PLAYER_SIZE / 2;
+    const cy = player.y + GAME_CONFIG.PLAYER_SIZE / 2;
+    player.equipWeapon('rifle');
+    broadcast({ type: 'mechDestroyed', x: cx, y: cy, playerId: player.id });
+    broadcast({
+        type: 'chatMessage', playerId: 0, playerName: '系统',
+        content: `${player.nickname} 的机甲被摧毁了！`, timestamp: Date.now()
+    });
+    // 机甲殉爆（不伤驾驶员）
+    explodeAt(cx, cy, 100, 70, player.id, '机甲殉爆');
+}
+
 // ===================== 感染模式 =====================
 // 随机一人成为感染者（绿色/仅近战/150血），幸存者被杀即转阵营；
 // 幸存者全灭感染者胜，撑到时间到幸存者胜
@@ -3352,7 +3476,9 @@ function processBulletCollisions(bullet) {
             const dy = bullet.y - (player.y + GAME_CONFIG.PLAYER_SIZE / 2);
             const distance = Math.sqrt(dx * dx + dy * dy);
 
-            if (distance < (GAME_CONFIG.PLAYER_SIZE / 2 + GAME_CONFIG.BULLET_SIZE / 2)) {
+            // 机甲体型为 2 倍，受弹判定同步加倍
+            const hitR = (player.mech ? GAME_CONFIG.PLAYER_SIZE : GAME_CONFIG.PLAYER_SIZE / 2) + GAME_CONFIG.BULLET_SIZE / 2;
+            if (distance < hitR) {
                 bulletHitPlayer = true;
                 if (isRocket) {
                     // 火箭弹直击：转为爆炸结算（命中者位于爆心，吃满伤害）
@@ -3442,6 +3568,11 @@ function resetGameState() {
     }
     // 感染模式：下一局重新随机感染者
     matchConfig.infectedAssigned = false;
+
+    // 清理机甲（场上与驾驶中的）
+    fieldMech = null;
+    lastMechEvent = Date.now();
+    gameState.players.forEach(p => { p.mech = null; });
 
     // 无条件重生成地形（恢复上一局被炸毁的木箱/油桶）
     gameState.terrain = generateTerrain(matchConfig.mapId);
@@ -3614,6 +3745,11 @@ function updateGameLogic() {
     // 感染模式：初始感染者分配与胜负检查
     if (matchConfig.infectMode && !gameState.isGameEnded) {
         updateInfectMode();
+    }
+
+    // 机甲空投与驾驶检测
+    if (!gameState.isGameEnded) {
+        mechTick(now);
     }
 
     // 计算delta时间

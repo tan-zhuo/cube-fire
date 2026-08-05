@@ -110,6 +110,10 @@ class SoundFX {
                 this.tone('sawtooth', 140, 60, 0.28, 0.30 * vol);
                 this.noise(0.10, 3000, 800, 0.2 * vol, 0, 'highpass');
                 break;
+            case 'mech': // 机甲加特林：沉重速射炮点
+                this.noise(0.05, 1600, 300, 0.34 * vol);
+                this.tone('square', 220, 110, 0.05, 0.2 * vol);
+                break;
             default: // 步枪
                 this.noise(0.09, 3200, 400, 0.42 * vol);
                 this.tone('square', 620, 160, 0.08, 0.16 * vol);
@@ -126,6 +130,19 @@ class SoundFX {
     emptyClick() { // 空仓击锤
         this.tone('square', 520, 380, 0.03, 0.16);
         this.noise(0.02, 4000, 2500, 0.08, 0, 'highpass');
+    }
+
+    heli() { // 直升机旋翼：低频节拍扫过（约3.5秒）
+        for (let i = 0; i < 24; i++) {
+            this.noise(0.05, 300, 90, 0.22, i * 0.145);
+            if (i % 2 === 0) this.tone('sawtooth', 55, 55, 0.1, 0.1, i * 0.145);
+        }
+    }
+
+    mechLand(vol = 1) { // 机甲落地：重锤砸地
+        this.noise(0.3, 500, 60, 0.55 * vol);
+        this.tone('sine', 70, 30, 0.35, 0.5 * vol);
+        this.noise(0.12, 2500, 600, 0.2 * vol, 0.02);
     }
 
     crateBreak(vol = 1) { // 木箱碎裂：闷响 + 木屑脆声

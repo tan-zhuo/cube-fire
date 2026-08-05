@@ -33,6 +33,7 @@ CUBEFIRE·立方火线：多人局域网2.5D俯视角射击游戏，支持两种
 - 对战模式：个人混战（默认）、红蓝对抗（`matchConfig.teamMode`）或感染模式（`matchConfig.infectMode`，复用team字段：1=感染者/2=幸存者，随机一人感染、仅近战150血绿色、被杀转阵营、全灭感染胜/撑到时间幸存胜，`updateInfectMode`惰性分配）；分队模式下自动均衡分队、按队分色、分区出生（`teamZones`）、友军伤害豁免、机器人不打队友
 - 可破坏地形：木箱(crate)被爆炸摧毁、油桶(barrel)被子弹/爆炸引爆连锁（`destroyTerrainInRadius`/`detonateBarrelByBullet`，`terrainRemove`/`terrainSync`走JSON广播），回合重置恢复地形
 - 连杀系统：`registerKill`（含近战路径），`killstreak`/`streakEnd`消息JSON广播，客户端中央横幅
+- 机甲空投：`mechTick`定时空投（`/mech`立即召唤），机甲复用武器索引5同步（WEAPONS.mech infinite），进入即`player.mech={hp:400}`、伤害由takeDamage装甲吸收、受弹半径2倍、G键发火箭；事件走JSON（heliDrop/mechSpawn/mechEnter/mechHp/mechDestroyed）
 - 房主在大厅创建房间时选择地图/模式；服务器模式通过环境变量`MAP_ID`/`TEAM_MODE=1`指定
 - 游戏内聊天命令：`/map 地图ID`、`/team on|off`（下一局生效）、`/bot N`
 - 协议中玩家数据的`color`字符串后新增`team`字节(uint8)，改动编码时三个文件需同步
