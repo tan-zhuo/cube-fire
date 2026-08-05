@@ -891,6 +891,24 @@ class GameClient {
                 if (e.key === 'Enter') this.sendChatMessage();
             });
         }
+
+        // 表情快捷栏
+        const emojiBar = document.getElementById('emojiBar');
+        if (emojiBar && chatInput) {
+            ['😀', '😂', '😎', '😭', '🤔', '😱', '👍', '🔥', '💥', '🎉', '🫡', '💀'].forEach(em => {
+                const btn = document.createElement('button');
+                btn.className = 'emoji-btn';
+                btn.type = 'button';
+                btn.textContent = em;
+                btn.addEventListener('click', () => {
+                    if (chatInput.value.length + em.length <= (chatInput.maxLength || 100)) {
+                        chatInput.value += em;
+                    }
+                    chatInput.focus();
+                });
+                emojiBar.appendChild(btn);
+            });
+        }
     }
 
     setupUI() {
@@ -1028,23 +1046,107 @@ class GameClient {
         }
     }
 
-    addChatMessage(playerName, content) {
+    // 聊天消息（全程 textContent 渲染，昵称与内容均为用户输入，防 XSS）
+    addChatMessage(playerName, content, playerId) {
         const container = document.getElementById('chatMessages');
         if (!container) return;
         const msg = document.createElement('div');
         msg.className = 'chat-message';
-        const sender = document.createElement('span');
-        sender.className = 'sender';
-        sender.textContent = playerName || '系统';
-        const text = document.createElement('span');
-        text.className = 'content';
-        text.textContent = content || '';
-        msg.appendChild(sender);
-        msg.appendChild(document.createTextNode(': '));
-        msg.appendChild(text);
+        const isSystem = !playerId || playerName === '系统';
+        if (isSystem) {
+            msg.classList.add('system');
+            msg.textContent = content || '';
+        } else {
+            if (playerId === this.playerId) msg.classList.add('mine');
+            const sender = document.createElement('span');
+            sender.className = 'sender';
+            sender.textContent = playerName || '玩家';
+            const p = this.players.get(playerId);
+            if (p && p.color) sender.style.color = p.color;
+            const bubble = document.createElement('div');
+            bubble.className = 'bubble';
+            bubble.textContent = content || '';
+            msg.append(sender, bubble);
+        }
         container.appendChild(msg);
+        // 只保留最近 60 条
+        while (container.children.length > 60) container.removeChild(container.firstChild);
         // 滚动到底部
         container.scrollTop = container.scrollHeight;
+    }
+
+    // 角色头顶聊天气泡（画布绘制，天然免疫 XSS）
+    setChatBubble(playerId, content) {
+        if (!playerId || !content) return;
+        const text = String(content).trim();
+        if (!text || text.startsWith('/')) return; // 指令不冒泡
+        const p = this.players.get(playerId);
+        if (!p) return;
+        p.chatBubble = { text: text.slice(0, 50), until: Date.now() + 4000 };
+    }
+
+    drawChatBubble(player) {
+        const b = player.chatBubble;
+        if (!b || b.until < Date.now()) return;
+        const ctx = this.backCtx;
+        const size = (this.gameConfig && this.gameConfig.PLAYER_SIZE) || 20;
+        const cx = player.x + size / 2;
+
+        ctx.save();
+        ctx.font = '12px system-ui, sans-serif';
+        // 文本换行（最多 2 行，超出加省略号）
+        const maxW = 150;
+        const lines = [];
+        let cur = '';
+        let truncated = false;
+        for (const ch of b.text) {
+            if (ctx.measureText(cur + ch).width > maxW) {
+                lines.push(cur);
+                cur = ch;
+                if (lines.length === 2) { truncated = true; cur = ''; break; }
+            } else {
+                cur += ch;
+            }
+        }
+        if (cur && lines.length < 2) lines.push(cur);
+        if (truncated) lines[1] = lines[1].slice(0, -1) + '…';
+        if (!lines.length) { ctx.restore(); return; }
+
+        const lineH = 15;
+        const w = Math.min(maxW, Math.max(...lines.map(l => ctx.measureText(l).width))) + 18;
+        const h = lines.length * lineH + 11;
+        let bx = cx - w / 2;
+        bx = Math.max(4, Math.min(this.canvas.width - w - 4, bx));
+        const by = player.y - 32 - h;
+
+        // 尾声淡出
+        const rem = b.until - Date.now();
+        ctx.globalAlpha = Math.min(1, rem / 300);
+
+        // 尾巴（先画，让气泡描边盖住接缝）
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
+        ctx.strokeStyle = '#232842';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cx - 6, by + h - 2);
+        ctx.lineTo(cx, by + h + 7);
+        ctx.lineTo(cx + 6, by + h - 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        // 气泡体
+        ctx.beginPath();
+        ctx.roundRect(bx, by, w, h, 10);
+        ctx.fill();
+        ctx.stroke();
+        // 补一块白色遮住尾巴顶部的描边接缝
+        ctx.fillRect(cx - 5, by + h - 2.5, 10, 2);
+        // 文本
+        ctx.fillStyle = '#1f2536';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        lines.forEach((l, i) => ctx.fillText(l, bx + w / 2, by + 6 + i * lineH));
+        ctx.restore();
     }
 
     handleMessage(message) {
@@ -1052,7 +1154,8 @@ class GameClient {
             // ...
 
             case 'chatMessage':
-                this.addChatMessage(message.playerName, message.content);
+                this.addChatMessage(message.playerName, message.content, message.playerId);
+                this.setChatBubble(message.playerId, message.content);
                 break;
 
             case 'explosion': {
@@ -1509,7 +1612,8 @@ class GameClient {
                 const playerId = decoder.readUint32();
                 const playerName = decoder.readString();
                 const content = decoder.readString();
-                this.addChatMessage(playerName, content);
+                this.addChatMessage(playerName, content, playerId);
+                this.setChatBubble(playerId, content);
                 return;
             }
 
@@ -1965,10 +2069,12 @@ class GameClient {
             if (player.id === this.playerId) {
                 playerDiv.classList.add('current-player');
             }
-            playerDiv.innerHTML = `
-                <span>${player.nickname}</span>
-                <span>${player.score}</span>
-            `;
+            // 昵称是用户输入，必须用 textContent 防 XSS
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = player.nickname;
+            const scoreSpan = document.createElement('span');
+            scoreSpan.textContent = player.score;
+            playerDiv.append(nameSpan, scoreSpan);
             playersList.appendChild(playerDiv);
         };
 
@@ -2049,11 +2155,18 @@ class GameClient {
         // 根据武器类型选择强调色
         const weaponColor = killInfo.weapon === '近战' ? '#f87171' : '#fbbf24';
         
-        killNotification.innerHTML = `
-            <span class="killer">${killInfo.killer}</span>
-            <span class="weapon" style="color: ${weaponColor}">${killInfo.weapon}</span>
-            <span class="victim">${killInfo.victim}</span>
-        `;
+        // 昵称是用户输入，必须用 textContent 防 XSS
+        const killerSpan = document.createElement('span');
+        killerSpan.className = 'killer';
+        killerSpan.textContent = killInfo.killer;
+        const weaponSpan = document.createElement('span');
+        weaponSpan.className = 'weapon';
+        weaponSpan.style.color = weaponColor;
+        weaponSpan.textContent = killInfo.weapon;
+        const victimSpan = document.createElement('span');
+        victimSpan.className = 'victim';
+        victimSpan.textContent = killInfo.victim;
+        killNotification.append(killerSpan, weaponSpan, victimSpan);
 
         // 设置边框颜色
         killNotification.style.borderLeftColor = weaponColor;
@@ -2141,11 +2254,13 @@ class GameClient {
             const scoreItem = document.createElement('div');
             scoreItem.className = 'score-item';
             const teamColor = player.team === 1 ? '#e74c3c' : player.team === 2 ? '#3498db' : '';
-            const nameStyle = teamColor ? ` style="color: ${teamColor}"` : '';
-            scoreItem.innerHTML = `
-                <span${nameStyle}>${index + 1}. ${player.nickname}</span>
-                <span>${player.score} 分</span>
-            `;
+            // 昵称是用户输入，必须用 textContent 防 XSS
+            const nameSpan = document.createElement('span');
+            if (teamColor) nameSpan.style.color = teamColor;
+            nameSpan.textContent = `${index + 1}. ${player.nickname}`;
+            const ptsSpan = document.createElement('span');
+            ptsSpan.textContent = `${player.score} 分`;
+            scoreItem.append(nameSpan, ptsSpan);
             finalScores.appendChild(scoreItem);
         });
 
@@ -3060,6 +3175,9 @@ class GameClient {
 
         // 伤害飘字
         this.drawDamageNumbers();
+
+        // 角色头顶聊天气泡
+        this.players.forEach(p => this.drawChatBubble(p));
 
         this.backCtx.restore();
 

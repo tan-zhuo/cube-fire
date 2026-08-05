@@ -777,15 +777,31 @@ function startLandingFx() {
     let lastT = 0;
 
     function drawBlock(px, py) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.32)';
-        ctx.fillRect(px + 5, py + S - 2, S, 7);
-        ctx.fillStyle = '#151f38';
-        ctx.fillRect(px, py + S - EX, S, EX);
-        ctx.fillStyle = '#26365a';
-        ctx.fillRect(px, py - EX, S, S);
-        ctx.strokeStyle = '#3b5382';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(px + 0.5, py - EX + 0.5, S - 1, S - 1);
+        // 卡通积木块：圆角 + 粗描边 + 顶缘高光（与游戏内地形一致）
+        const R = 6;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+        ctx.beginPath();
+        ctx.ellipse(px + S / 2 + 3, py + S + 2, S * 0.55, 6, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#4552a8';
+        ctx.beginPath();
+        ctx.roundRect(px, py + S - EX - R, S, EX + R, R);
+        ctx.fill();
+        ctx.fillStyle = '#6b7fdd';
+        ctx.beginPath();
+        ctx.roundRect(px, py - EX, S, S, R);
+        ctx.fill();
+        ctx.strokeStyle = '#2b3472';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.roundRect(px + 1, py - EX + 1, S - 2, S + EX - 2, R);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.30)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(px + R, py - EX + 2.5);
+        ctx.lineTo(px + S - R, py - EX + 2.5);
+        ctx.stroke();
     }
 
     function drawFighter(f, t, aimAngle) {
@@ -795,22 +811,41 @@ function startLandingFx() {
         ctx.beginPath();
         ctx.ellipse(f.x, f.y + size * 0.62, size * 0.6, size * 0.26, 0, 0, Math.PI * 2);
         ctx.fill();
-        // 身体
+        // 身体（卡通：圆角 + 粗描边 + 大眼睛）
         ctx.save();
         ctx.translate(f.x, f.y);
         ctx.rotate(aimAngle);
         const g = ctx.createLinearGradient(0, -size / 2, 0, size / 2);
-        g.addColorStop(0, '#ffffff55');
-        g.addColorStop(1, '#00000044');
+        g.addColorStop(0, '#ffffff44');
+        g.addColorStop(1, '#00000033');
         ctx.fillStyle = f.color;
-        ctx.fillRect(-size / 2, -size / 2, size, size);
+        ctx.beginPath();
+        ctx.roundRect(-size / 2, -size / 2, size, size, 5);
+        ctx.fill();
         ctx.fillStyle = g;
-        ctx.fillRect(-size / 2, -size / 2, size, size);
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(-size / 2, -size / 2, size, size);
+        ctx.beginPath();
+        ctx.roundRect(-size / 2, -size / 2, size, size, 5);
+        ctx.fill();
+        ctx.strokeStyle = '#232842';
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
         ctx.fillStyle = '#e8edf5';
         ctx.fillRect(size / 2 - 2, -2.5, 10, 5);
+        // 眼睛
+        const eyeX = size * 0.14, eyeY = size * 0.2, eyeR = size * 0.17;
+        for (const sy of [-1, 1]) {
+            ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = '#232842';
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.arc(eyeX, sy * eyeY, eyeR, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = '#232842';
+            ctx.beginPath();
+            ctx.arc(eyeX + eyeR * 0.42, sy * eyeY, eyeR * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
         // 枪口闪光
         if (t - f.flashAt < 90) {
             const fg = ctx.createRadialGradient(size / 2 + 10, 0, 1, size / 2 + 10, 0, 16);

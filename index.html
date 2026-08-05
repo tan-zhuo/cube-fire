@@ -116,21 +116,21 @@
             inset: 0;
             z-index: 1000;
             overflow-y: auto;
+            /* 卡通风：明快靛蓝底 + 多彩光晕 */
             background:
-                radial-gradient(ellipse 70% 55% at 50% -15%, rgba(56, 189, 248, 0.16), transparent),
-                radial-gradient(ellipse 45% 40% at 8% 105%, rgba(129, 140, 248, 0.14), transparent),
-                radial-gradient(ellipse 40% 35% at 95% 90%, rgba(14, 165, 233, 0.10), transparent),
-                var(--bg-0);
+                radial-gradient(ellipse 70% 55% at 50% -15%, rgba(99, 132, 255, 0.30), transparent),
+                radial-gradient(ellipse 45% 40% at 8% 105%, rgba(167, 139, 250, 0.24), transparent),
+                radial-gradient(ellipse 40% 35% at 95% 90%, rgba(56, 189, 248, 0.20), transparent),
+                #171d3d;
         }
 
         #loginModal::before {
             content: '';
             position: fixed;
             inset: 0;
-            background-image:
-                linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
-            background-size: 44px 44px;
+            /* 点阵纹理（与游戏内场地一致） */
+            background-image: radial-gradient(rgba(255, 255, 255, 0.10) 1.5px, transparent 1.5px);
+            background-size: 46px 46px;
             mask-image: radial-gradient(ellipse 75% 65% at 50% 40%, #000 20%, transparent 100%);
             -webkit-mask-image: radial-gradient(ellipse 75% 65% at 50% 40%, #000 20%, transparent 100%);
             pointer-events: none;
@@ -723,6 +723,7 @@
         }
 
         #chatroom.collapsed .chat-messages,
+        #chatroom.collapsed .emoji-bar,
         #chatroom.collapsed .chat-input-container {
             display: none;
         }
@@ -772,27 +773,89 @@
         }
 
         .chat-message {
-            margin-bottom: 7px;
-            word-wrap: break-word;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            margin-bottom: 9px;
             animation: fadeIn 0.25s ease-in;
-            line-height: 1.45;
         }
 
         .chat-message .sender {
             color: var(--accent);
             font-weight: 700;
+            font-size: 11px;
+            margin: 0 6px 3px;
+            letter-spacing: 0.5px;
+        }
+
+        .chat-message .bubble {
+            max-width: 88%;
+            padding: 6px 12px;
             font-size: 13px;
-        }
-
-        .chat-message .content {
+            line-height: 1.45;
             color: var(--text-hi);
-            margin-left: 4px;
+            background: rgba(148, 163, 184, 0.13);
+            border: 1.5px solid var(--border-strong);
+            border-radius: 13px;
+            border-top-left-radius: 4px;
+            word-break: break-word;
         }
 
+        /* 自己的消息：右对齐 + 主题色气泡 */
+        .chat-message.mine {
+            align-items: flex-end;
+        }
+
+        .chat-message.mine .bubble {
+            background: rgba(56, 189, 248, 0.16);
+            border-color: rgba(56, 189, 248, 0.5);
+            border-radius: 13px;
+            border-top-right-radius: 4px;
+        }
+
+        /* 系统消息：居中小胶囊 */
         .chat-message.system {
+            align-items: center;
+            font-size: 11.5px;
             color: var(--text-low);
-            font-style: italic;
-            text-align: center;
+            background: rgba(148, 163, 184, 0.07);
+            border-radius: 999px;
+            padding: 3px 12px;
+            align-self: center;
+            max-width: 95%;
+            word-break: break-word;
+        }
+
+        /* 表情快捷栏 */
+        .emoji-bar {
+            display: flex;
+            gap: 1px;
+            padding: 5px 8px 0;
+            overflow-x: auto;
+            scrollbar-width: none;
+            border-top: 1px solid var(--border);
+            background: rgba(7, 11, 20, 0.3);
+        }
+
+        .emoji-bar::-webkit-scrollbar {
+            display: none;
+        }
+
+        .emoji-btn {
+            flex-shrink: 0;
+            background: none;
+            border: none;
+            font-size: 17px;
+            line-height: 1;
+            padding: 3px 5px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.1s, background 0.15s;
+        }
+
+        .emoji-btn:hover {
+            transform: scale(1.3);
+            background: rgba(148, 163, 184, 0.12);
         }
 
         @keyframes fadeIn {
@@ -1776,6 +1839,7 @@
             <div id="chatroom" class="hud-panel hidden">
                 <div class="chat-header">聊天室</div>
                 <div class="chat-messages" id="chatMessages"></div>
+                <div class="emoji-bar" id="emojiBar"></div>
                 <div class="chat-input-container">
                     <input type="text" id="chatInput" placeholder="输入消息，/bot 3 召唤机器人" maxlength="100">
                     <button id="chatSend">发送</button>
