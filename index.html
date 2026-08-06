@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="description" content="不服来战 — 多人局域网2D射击竞技场。无需服务器，浏览器直连开战。">
+    <meta name="description" content="不服来战 — 多人局域网2.5D射击竞技场。机甲空投、可破坏地形、感染模式，无需服务器，浏览器直连开战。">
     <title>CUBEFIRE · 立方火线</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2.5 20.5 7.25 12 12 3.5 7.25z' fill='%237dd3fc'/><path d='M3.5 7.25 12 12v9.5L3.5 16.75z' fill='%230ea5e9'/><path d='M20.5 7.25 12 12v9.5l8.5-4.75z' fill='%23075985'/></svg>">
     <script defer src="https://cdn.vercel-insights.com/v1/script.js"></script>
@@ -286,6 +286,24 @@
             border-color: var(--border);
         }
 
+        a.topbar-gh {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--text-mid);
+            background: rgba(148, 163, 184, 0.08);
+            border-color: var(--border-strong);
+            text-decoration: none;
+            transition: border-color 0.2s, color 0.2s;
+        }
+
+        a.topbar-gh:hover {
+            color: var(--text-hi);
+            border-color: var(--accent);
+        }
+
+        a.topbar-gh svg { display: block; }
+
         .landing-hero {
             text-align: center;
             margin: clamp(10px, 2.5vh, 28px) 0 clamp(12px, 2.5vh, 26px);
@@ -322,11 +340,70 @@
             letter-spacing: 3px;
         }
 
-        .hero-features {
-            margin-top: 12px;
-            font-size: 13px;
-            color: var(--text-low);
-            letter-spacing: 2px;
+        /* 特性卡片：图标 + 卖点，展示机甲空投等核心玩法 */
+        .hero-feats {
+            margin: clamp(12px, 2.2vh, 22px) auto 0;
+            width: min(520px, 100%);
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .feat-chip {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 11px;
+            text-align: left;
+            background: rgba(13, 20, 36, 0.55);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            transition: transform 0.15s, border-color 0.2s;
+        }
+
+        .feat-chip:hover {
+            transform: translateY(-2px);
+            border-color: var(--border-strong);
+        }
+
+        .feat-ico {
+            flex-shrink: 0;
+            width: 32px;
+            height: 32px;
+            display: grid;
+            place-items: center;
+            border-radius: 9px;
+            border: 1px solid;
+        }
+
+        .feat-ico svg { width: 18px; height: 18px; display: block; }
+        .t-gold   { color: #fcd34d; background: rgba(251, 191, 36, 0.10); border-color: rgba(251, 191, 36, 0.30); }
+        .t-sky    { color: #7dd3fc; background: rgba(56, 189, 248, 0.10); border-color: rgba(56, 189, 248, 0.30); }
+        .t-red    { color: #fca5a5; background: rgba(248, 113, 113, 0.10); border-color: rgba(248, 113, 113, 0.30); }
+        .t-violet { color: #c4b5fd; background: rgba(167, 139, 250, 0.10); border-color: rgba(167, 139, 250, 0.32); }
+        .t-green  { color: #86efac; background: rgba(52, 211, 153, 0.10); border-color: rgba(52, 211, 153, 0.30); }
+        .t-cyan   { color: #67e8f9; background: rgba(34, 211, 238, 0.10); border-color: rgba(34, 211, 238, 0.30); }
+
+        .feat-txt {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+
+        .feat-txt b {
+            font-size: 12.5px;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            color: var(--text-hi);
+        }
+
+        .feat-txt span {
+            font-size: 11px;
+            line-height: 1.35;
+            color: var(--text-mid);
         }
 
         /* 登录卡片 */
@@ -1667,11 +1744,21 @@
             .hero-title {
                 font-size: clamp(44px, 8vh, 76px);
             }
+            .hero-feats {
+                margin-left: 0;
+                margin-right: 0;
+            }
         }
 
-        /* 窄且矮的窗口：收起特性行与按键说明，优先不出滚动条 */
+        /* 宽屏但矮的窗口：特性卡片收为单列，避免出滚动条 */
+        @media (min-width: 1180px) and (max-height: 720px) {
+            .hero-feats { grid-template-columns: 1fr; gap: 6px; width: min(340px, 100%); }
+            .feat-chip { padding: 6px 10px; }
+        }
+
+        /* 窄且矮的窗口：收起特性卡片与按键说明，优先不出滚动条 */
         @media (max-width: 1179px) and (max-height: 850px) {
-            .hero-features { display: none; }
+            .hero-feats { display: none; }
             .landing-controls { display: none; }
         }
 
@@ -1693,6 +1780,12 @@
             .landing-controls {
                 gap: 12px;
             }
+            .landing-topbar {
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            /* 窄屏收起装饰标语，给 GitHub 入口留位置 */
+            .topbar-tagline { display: none; }
         }
         /* ===== 房主对局选项（地图 / 模式） ===== */
         #hostOptions {
@@ -2208,7 +2301,8 @@
                             <button data-lang="ja">日</button>
                         </div>
                         <button id="soundToggle" class="topbar-tag" title="开关音效与背景音乐（快捷键 M）" data-i18n-title="lp.soundTitle" data-i18n="lp.soundOn">声音 开</button>
-                        <div class="topbar-tag" data-i18n="lp.tagline">无服务器 · 浏览器直连</div>
+                        <a class="topbar-tag topbar-gh" href="https://github.com/tan-zhuo/cube-fire" target="_blank" rel="noopener" title="在 GitHub 查看源码，欢迎 Star" data-i18n-title="lp.ghTitle"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span data-i18n="lp.gh">开源</span></a>
+                        <div class="topbar-tag topbar-tagline" data-i18n="lp.tagline">无服务器 · 浏览器直连</div>
                     </div>
                 </div>
 
@@ -2216,7 +2310,32 @@
                 <div class="landing-hero">
                     <h1 class="hero-title" data-i18n="lp.heroTitle">立方火线</h1>
                     <p class="hero-sub" data-i18n="lp.heroSub">不服来战 · 多人局域网 2.5D 射击竞技场</p>
-                    <p class="hero-features" data-i18n="lp.heroFeatures">射击 · 近战 · 道具增益 · AI 机器人 · P2P 直连</p>
+                    <div class="hero-feats">
+                        <div class="feat-chip">
+                            <span class="feat-ico t-gold"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h18M12 4.5v2.5"/><rect x="7" y="7" width="10" height="7.5" rx="2.5"/><path d="M17 10.5h4M8.5 14.5v2.5M15.5 14.5v2.5M6.5 17h11"/></svg></span>
+                            <span class="feat-txt"><b data-i18n="lp.featMech">机甲空投</b><span data-i18n="lp.featMechD">直升机定点空投，进驻重装机甲</span></span>
+                        </div>
+                        <div class="feat-chip">
+                            <span class="feat-ico t-sky"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="6.5"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg></span>
+                            <span class="feat-txt"><b data-i18n="lp.featArsenal">硬核军火</b><span data-i18n="lp.featArsenalD">狙击 · 霰弹 · 火箭筒 · 手雷</span></span>
+                        </div>
+                        <div class="feat-chip">
+                            <span class="feat-ico t-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="14.5" r="6"/><path d="M14.5 9.5 18 6M18 6l1.8-.6M18 6l.6-1.8M18 6l2.4 1.2"/></svg></span>
+                            <span class="feat-txt"><b data-i18n="lp.featBoom">全场可炸</b><span data-i18n="lp.featBoomD">木箱炸碎，油桶连环殉爆</span></span>
+                        </div>
+                        <div class="feat-chip">
+                            <span class="feat-ico t-violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 21V4"/><path d="M6 4.5h11.5L15 8l2.5 3.5H6"/></svg></span>
+                            <span class="feat-txt"><b data-i18n="lp.featModes">三大模式</b><span data-i18n="lp.featModesD">个人混战 · 红蓝对抗 · 感染</span></span>
+                        </div>
+                        <div class="feat-chip">
+                            <span class="feat-ico t-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 7V4M14 7V4M10 20v-3M14 20v-3M7 10H4M7 14H4M20 10h-3M20 14h-3"/></svg></span>
+                            <span class="feat-txt"><b data-i18n="lp.featBots">AI 机器人</b><span data-i18n="lp.featBotsD">单人也能开战，连杀播报</span></span>
+                        </div>
+                        <div class="feat-chip">
+                            <span class="feat-ico t-cyan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="5" cy="12" r="2.6"/><circle cx="19" cy="12" r="2.6"/><path d="M7.6 12h8.8"/><path d="M12 9.8v4.4" opacity="0"/></svg></span>
+                            <span class="feat-txt"><b data-i18n="lp.featP2p">无服务器</b><span data-i18n="lp.featP2pD">浏览器 P2P 直连，打开即玩</span></span>
+                        </div>
+                    </div>
                 </div>
 
                 <div id="loginForm">
@@ -2316,7 +2435,7 @@
                 </div>
 
                 <div class="landing-footer">
-                    <b data-i18n="lp.footerBrand">CUBEFIRE · 立方火线</b> · <span data-i18n="lp.footerInfo">2 分钟一局 · 击杀 +100 分 命中 +10 分 · 支持局域网多人同屏对战</span> · <a class="footer-link" href="https://tanzhuo.xyz" target="_blank" rel="noopener" data-i18n="lp.footerBlog">作者博客</a>
+                    <b data-i18n="lp.footerBrand">CUBEFIRE · 立方火线</b> · <span data-i18n="lp.footerInfo">2 分钟一局 · 击杀 +100 分 命中 +10 分 · 支持局域网多人同屏对战</span> · <a class="footer-link" href="https://github.com/tan-zhuo/cube-fire" target="_blank" rel="noopener" data-i18n="lp.footerGh">GitHub 开源</a> · <a class="footer-link" href="https://tanzhuo.xyz" target="_blank" rel="noopener" data-i18n="lp.footerBlog">作者博客</a>
                 </div>
             </div>
         </div>
