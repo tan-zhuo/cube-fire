@@ -11,7 +11,7 @@
 ![Net](https://img.shields.io/badge/联机-WebRTC%20DataChannel-818cf8)
 ![Server](https://img.shields.io/badge/服务器-可选-34d399)
 
-![游戏截图](docs/screenshot-game.png)
+![实机演示：机器人混战 · 直升机空投机甲 · 火箭筒爆炸](docs/gameplay.gif)
 
 </div>
 
